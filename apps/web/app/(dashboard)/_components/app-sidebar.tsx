@@ -45,7 +45,7 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useInboxStore } from "@/features/inbox";
 import { useModalStore } from "@/features/modals";
-import { useProjectStore } from "@/features/projects";
+import { usePersonalProjectTabOrder, useProjectStore } from "@/features/projects";
 
 const primaryNav = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
@@ -67,6 +67,7 @@ export function AppSidebar() {
   const user = useAuthStore((s) => s.user);
   const authLogout = useAuthStore((s) => s.logout);
   const workspace = useWorkspaceStore((s) => s.workspace);
+  const orderedProjects = usePersonalProjectTabOrder(projects);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
   const { open, toggleSidebar } = useSidebar();
@@ -183,8 +184,8 @@ export function AppSidebar() {
                     ? pathname === "/projects" || pathname.startsWith("/projects/")
                     : pathname === item.href;
                   const projectsHref =
-                    isProjects && projects[0]
-                      ? `/projects/${projects[0].id}`
+                    isProjects && orderedProjects[0]
+                      ? `/projects/${orderedProjects[0].id}`
                       : item.href;
                   return (
                     <SidebarMenuItem key={item.href}>

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { MulticaIcon } from "@/components/multica-icon";
 import { Button } from "@/components/ui/button";
 import { canCreateOrRenameProjects, useCurrentWorkspaceMember } from "@/features/workspace";
-import { useProjectStore } from "@/features/projects";
+import { usePersonalProjectTabOrder, useProjectStore } from "@/features/projects";
 
 export default function ProjectsIndexPage() {
   const router = useRouter();
@@ -14,13 +14,14 @@ export default function ProjectsIndexPage() {
   const createProject = useProjectStore((s) => s.createProject);
   const member = useCurrentWorkspaceMember();
   const canCreate = canCreateOrRenameProjects(member?.role);
+  const orderedProjects = usePersonalProjectTabOrder(projects);
 
   useEffect(() => {
     if (loading) return;
-    if (projects.length > 0) {
-      router.replace(`/projects/${projects[0]!.id}`);
+    if (orderedProjects.length > 0) {
+      router.replace(`/projects/${orderedProjects[0]!.id}`);
     }
-  }, [loading, projects, router]);
+  }, [loading, orderedProjects, router]);
 
   if (loading) {
     return (
@@ -30,7 +31,7 @@ export default function ProjectsIndexPage() {
     );
   }
 
-  if (projects.length > 0) {
+  if (orderedProjects.length > 0) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <MulticaIcon className="size-6 animate-pulse" />
