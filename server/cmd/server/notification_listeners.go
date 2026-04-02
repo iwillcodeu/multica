@@ -14,9 +14,10 @@ import (
 
 // mention represents a parsed @mention from markdown content (local alias).
 type mention struct {
-	Type string // "member", "agent", or "all"
-	ID   string // user_id, agent_id, or "all"
+	Type string // "member", "agent", "issue", or "all"
+	ID   string // user_id, agent_id, issue_id, or "all"
 }
+
 
 // statusLabels maps DB status values to human-readable labels for notifications.
 var statusLabels = map[string]string{
@@ -459,13 +460,15 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		// The comment payload can come as handler.CommentResponse from the
 		// HTTP handler, or as map[string]any from the agent comment path in
 		// task.go. Handle both.
-		var issueID, commentContent string
+		var issueID, commentID, commentContent string
 		switch c := payload["comment"].(type) {
 		case handler.CommentResponse:
 			issueID = c.IssueID
+			commentID = c.ID
 			commentContent = c.Content
 		case map[string]any:
 			issueID, _ = c["issue_id"].(string)
+			commentID, _ = c["id"].(string)
 			commentContent, _ = c["content"].(string)
 		default:
 			return
@@ -474,17 +477,24 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		issueTitle, _ := payload["issue_title"].(string)
 		issueStatus, _ := payload["issue_status"].(string)
 
+		commentDetails := emptyDetails
+		if commentID != "" {
+			commentDetails, _ = json.Marshal(map[string]string{
+				"comment_id": commentID,
+			})
+		}
+
 		notifySubscribers(ctx, queries, bus, issueID, issueStatus, e.WorkspaceID, e,
 			nil, "new_comment", "info",
 			issueTitle, commentContent,
-			emptyDetails)
+			commentDetails)
 
 		// Notify @mentions in comment content.
 		mentions := parseMentions(commentContent)
 		if len(mentions) > 0 {
 			skip := map[string]bool{e.ActorID: true}
 			notifyMentionedMembers(bus, queries, e, mentions, issueID, issueTitle, issueStatus,
-				issueTitle, skip, emptyDetails)
+				issueTitle, skip, commentDetails)
 		}
 	})
 
@@ -537,6 +547,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 
 		commentAuthorType, _ := payload["comment_author_type"].(string)
 		commentAuthorID, _ := payload["comment_author_id"].(string)
+		commentID, _ := payload["comment_id"].(string)
 		issueID, _ := payload["issue_id"].(string)
 		issueTitle, _ := payload["issue_title"].(string)
 		issueStatus, _ := payload["issue_status"].(string)
@@ -545,9 +556,13 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			return
 		}
 
-		details, _ := json.Marshal(map[string]string{
+		detailsMap := map[string]string{
 			"emoji": reaction.Emoji,
-		})
+		}
+		if commentID != "" {
+			detailsMap["comment_id"] = commentID
+		}
+		details, _ := json.Marshal(detailsMap)
 
 		notifyDirect(ctx, queries, bus,
 			commentAuthorType, commentAuthorID,

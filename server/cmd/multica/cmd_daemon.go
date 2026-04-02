@@ -184,9 +184,9 @@ func runDaemonBackground(cmd *cobra.Command) error {
 	}
 
 	if profile != "" {
-		fmt.Fprintf(os.Stderr, "Daemon [%s] started (pid %d)\n", profile, child.Process.Pid)
+		fmt.Fprintf(os.Stderr, "Daemon [%s] started (pid %d, version %s)\n", profile, child.Process.Pid, version)
 	} else {
-		fmt.Fprintf(os.Stderr, "Daemon started (pid %d)\n", child.Process.Pid)
+		fmt.Fprintf(os.Stderr, "Daemon started (pid %d, version %s)\n", child.Process.Pid, version)
 	}
 	fmt.Fprintf(os.Stderr, "Logs: %s\n", logPath)
 	return nil
@@ -263,6 +263,7 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	cfg.CLIVersion = version
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -280,6 +281,39 @@ func runDaemonForeground(cmd *cobra.Command) error {
 	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
+
+	// Check if the daemon needs to restart after a CLI update.
+	if restartBin := d.RestartBinary(); restartBin != "" {
+		logger.Info("restarting daemon with updated binary", "path", restartBin)
+
+		args := buildDaemonStartArgs(cmd)
+		child := exec.Command(restartBin, args...)
+
+		logPath := daemonLogPathForProfile(profile)
+		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			logger.Error("failed to open log file for restart", "error", err)
+			return nil
+		}
+		child.Stdout = logFile
+		child.Stderr = logFile
+		child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+		if err := child.Start(); err != nil {
+			logFile.Close()
+			logger.Error("failed to start new daemon", "error", err)
+			return nil
+		}
+		logFile.Close()
+		child.Process.Release()
+
+		// Write new PID file.
+		pidPath := daemonPIDPathForProfile(profile)
+		os.WriteFile(pidPath, []byte(strconv.Itoa(child.Process.Pid)), 0o644)
+
+		logger.Info("new daemon started", "pid", child.Process.Pid)
+	}
+
 	return nil
 }
 

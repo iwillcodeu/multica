@@ -6,6 +6,7 @@ import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
 import { useProjectStore } from "@/features/projects";
 import { useRuntimeStore } from "@/features/runtimes";
+import { toast } from "sonner";
 import { api } from "@/shared/api";
 import { createLogger } from "@/shared/logger";
 
@@ -78,14 +79,24 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     logger.debug("hydrate workspace", nextWorkspace.name, nextWorkspace.id);
     const [nextMembers, nextAgents, nextSkills] = await Promise.all([
-      api.listMembers(nextWorkspace.id),
-      api.listAgents({ workspace_id: nextWorkspace.id }),
+      api.listMembers(nextWorkspace.id).catch((e) => {
+        logger.error("failed to load members", e);
+        toast.error("Failed to load members");
+        return [] as MemberWithUser[];
+      }),
+      api.listAgents({ workspace_id: nextWorkspace.id, include_archived: true }).catch((e) => {
+        logger.error("failed to load agents", e);
+        toast.error("Failed to load agents");
+        return [] as Agent[];
+      }),
       api.listSkills().catch(() => [] as Skill[]),
     ]);
     await Promise.all([
       useIssueStore.getState().fetch(),
       useInboxStore.getState().fetch(),
       useProjectStore.getState().fetch(),
+      useIssueStore.getState().fetch().catch(() => {}),
+      useInboxStore.getState().fetch().catch(() => {}),
     ]);
     logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
     set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
@@ -119,16 +130,27 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   refreshWorkspaces: async () => {
     const { workspace, hydrateWorkspace } = get();
     const storedWorkspaceId = localStorage.getItem("multica_workspace_id");
-    const wsList = await api.listWorkspaces();
-    await hydrateWorkspace(wsList, workspace?.id ?? storedWorkspaceId);
-    return wsList;
+    try {
+      const wsList = await api.listWorkspaces();
+      await hydrateWorkspace(wsList, workspace?.id ?? storedWorkspaceId);
+      return wsList;
+    } catch (e) {
+      logger.error("failed to refresh workspaces", e);
+      toast.error("Failed to refresh workspaces");
+      return get().workspaces;
+    }
   },
 
   refreshMembers: async () => {
     const { workspace } = get();
     if (!workspace) return;
-    const members = await api.listMembers(workspace.id);
-    set({ members });
+    try {
+      const members = await api.listMembers(workspace.id);
+      set({ members });
+    } catch (e) {
+      logger.error("failed to refresh members", e);
+      toast.error("Failed to refresh members");
+    }
   },
 
   updateAgent: (id, updates) =>
@@ -139,23 +161,33 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   refreshAgents: async () => {
     const { workspace } = get();
     if (!workspace) return;
-    const agents = await api.listAgents({ workspace_id: workspace.id });
-    set({ agents });
+    try {
+      const agents = await api.listAgents({ workspace_id: workspace.id, include_archived: true });
+      set({ agents });
+    } catch (e) {
+      logger.error("failed to refresh agents", e);
+      toast.error("Failed to refresh agents");
+    }
   },
 
   refreshSkills: async () => {
     const { workspace, skills: existing } = get();
     if (!workspace) return;
-    const fetched = await api.listSkills();
-    // listSkills doesn't include files — preserve files from existing entries
-    const filesById = new Map(
-      existing.filter((s) => s.files?.length).map((s) => [s.id, s.files]),
-    );
-    const merged = fetched.map((s) => ({
-      ...s,
-      files: s.files ?? filesById.get(s.id) ?? [],
-    }));
-    set({ skills: merged });
+    try {
+      const fetched = await api.listSkills();
+      // listSkills doesn't include files — preserve files from existing entries
+      const filesById = new Map(
+        existing.filter((s) => s.files?.length).map((s) => [s.id, s.files]),
+      );
+      const merged = fetched.map((s) => ({
+        ...s,
+        files: s.files ?? filesById.get(s.id) ?? [],
+      }));
+      set({ skills: merged });
+    } catch (e) {
+      logger.error("failed to refresh skills", e);
+      toast.error("Failed to refresh skills");
+    }
   },
 
   upsertSkill: (skill) => {

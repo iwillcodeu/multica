@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/mention"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -130,6 +131,9 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// Determine author identity: agent (via X-Agent-ID header) or member.
 	authorType, authorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 
+	// Expand bare issue identifiers (e.g. MUL-117) into mention links.
+	req.Content = mention.ExpandIssueIdentifiers(r.Context(), h.Queries, issue.WorkspaceID, req.Content)
+
 	comment, err := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
 		IssueID:     issue.ID,
 		WorkspaceID: issue.WorkspaceID,
@@ -193,19 +197,22 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 // anyone but does NOT @mention the issue's assignee agent. This is used to
 // suppress the on_comment trigger when the user is directing their comment at
 // someone else (e.g. sharing results with a colleague, asking another agent).
+// @all is treated as a broadcast — it suppresses the trigger because the user
+// is announcing to everyone, not specifically requesting work from the agent.
 func (h *Handler) commentMentionsOthersButNotAssignee(content string, issue db.Issue) bool {
 	mentions := util.ParseMentions(content)
 	if len(mentions) == 0 {
 		return false // No mentions — normal on_comment behavior
+	}
+	// @all is a broadcast to all members — suppress agent trigger.
+	if util.HasMentionAll(mentions) {
+		return true
 	}
 	if !issue.AssigneeID.Valid {
 		return true // No assignee — mentions target others
 	}
 	assigneeID := uuidToString(issue.AssigneeID)
 	for _, m := range mentions {
-		if m.IsMentionAll() {
-			return false // @all includes everyone — allow trigger
-		}
 		if m.ID == assigneeID {
 			return false // Assignee is mentioned — allow trigger
 		}
@@ -242,11 +249,14 @@ func (h *Handler) isReplyToMemberThread(parent *db.Comment, content string, issu
 
 // enqueueMentionedAgentTasks parses @agent mentions from comment content and
 // enqueues a task for each mentioned agent. Skips self-mentions, agents that
-// are already the issue's assignee (handled by on_comment), and agents with
-// on_mention trigger disabled.
+// are already the issue's assignee (handled by on_comment), agents with
+// on_mention trigger disabled, and private agents mentioned by non-owner
+// members (only the agent owner or workspace admin/owner can mention a
+// private agent).
 // Note: no status gate here — @mention is an explicit action and should work
 // even on done/cancelled issues (the agent can reopen the issue if needed).
 func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue, comment db.Comment, authorType, authorID string) {
+	wsID := uuidToString(issue.WorkspaceID)
 	mentions := util.ParseMentions(comment.Content)
 	for _, m := range mentions {
 		if m.Type != "agent" {
@@ -263,8 +273,23 @@ func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue
 			issue.AssigneeID.Valid && uuidToString(issue.AssigneeID) == m.ID {
 			continue
 		}
+		// Load the agent to check visibility, archive status, and trigger config.
+		agent, err := h.Queries.GetAgent(ctx, agentUUID)
+		if err != nil || !agent.RuntimeID.Valid || agent.ArchivedAt.Valid {
+			continue
+		}
+		// Private agents can only be mentioned by the agent owner or workspace admin/owner.
+		if agent.Visibility == "private" && authorType == "member" {
+			isOwner := uuidToString(agent.OwnerID) == authorID
+			if !isOwner {
+				member, err := h.getWorkspaceMember(ctx, authorID, wsID)
+				if err != nil || !roleAllowed(member.Role, "owner", "admin") {
+					continue
+				}
+			}
+		}
 		// Check if the agent has on_mention trigger enabled.
-		if !h.isAgentMentionTriggerEnabled(ctx, agentUUID) {
+		if !agentHasTriggerEnabled(agent.Triggers, "on_mention") {
 			continue
 		}
 		// Dedup: skip if this agent already has a pending task for this issue.

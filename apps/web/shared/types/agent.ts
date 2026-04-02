@@ -73,6 +73,8 @@ export interface Agent {
   triggers: AgentTrigger[];
   created_at: string;
   updated_at: string;
+  archived_at: string | null;
+  archived_by: string | null;
 }
 
 export interface CreateAgentRequest {
@@ -173,4 +175,22 @@ export interface RuntimeUsage {
 export interface RuntimeHourlyActivity {
   hour: number;
   count: number;
+}
+
+export type RuntimeUpdateStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed"
+  | "timeout";
+
+export interface RuntimeUpdate {
+  id: string;
+  runtime_id: string;
+  status: RuntimeUpdateStatus;
+  target_version: string;
+  output?: string;
+  error?: string;
+  created_at: string;
+  updated_at: string;
 }

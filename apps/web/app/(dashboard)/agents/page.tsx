@@ -70,6 +70,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
@@ -328,6 +329,7 @@ function AgentListItem({
   onClick: () => void;
 }) {
   const st = statusConfig[agent.status];
+  const isArchived = !!agent.archived_at;
 
   return (
     <button
@@ -336,11 +338,11 @@ function AgentListItem({
         isSelected ? "bg-accent" : "hover:bg-accent/50"
       }`}
     >
-      <ActorAvatar actorType="agent" actorId={agent.id} size={32} className="rounded-lg" />
+      <ActorAvatar actorType="agent" actorId={agent.id} size={32} className={`rounded-lg ${isArchived ? "opacity-50 grayscale" : ""}`} />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="truncate text-sm font-medium">{agent.name}</span>
+          <span className={`truncate text-sm font-medium ${isArchived ? "text-muted-foreground" : ""}`}>{agent.name}</span>
           {agent.runtime_mode === "cloud" ? (
             <Cloud className="h-3 w-3 text-muted-foreground" />
           ) : (
@@ -348,8 +350,14 @@ function AgentListItem({
           )}
         </div>
         <div className="flex items-center gap-1.5 mt-0.5">
-          <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
-          <span className={`text-xs ${st.color}`}>{st.label}</span>
+          {isArchived ? (
+            <span className="text-xs text-muted-foreground">Archived</span>
+          ) : (
+            <>
+              <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
+              <span className={`text-xs ${st.color}`}>{st.label}</span>
+            </>
+          )}
         </div>
       </div>
     </button>
@@ -380,6 +388,8 @@ function InstructionsTab({
     setSaving(true);
     try {
       await onSave(value);
+    } catch {
+      // toast handled by parent
     } finally {
       setSaving(false);
     }
@@ -446,6 +456,8 @@ function SkillsTab({
       const newIds = [...agent.skills.map((s) => s.id), skillId];
       await api.setAgentSkills(agent.id, { skill_ids: newIds });
       await refreshAgents();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to add skill");
     } finally {
       setSaving(false);
       setShowPicker(false);
@@ -458,6 +470,8 @@ function SkillsTab({
       const newIds = agent.skills.filter((s) => s.id !== skillId).map((s) => s.id);
       await api.setAgentSkills(agent.id, { skill_ids: newIds });
       await refreshAgents();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove skill");
     } finally {
       setSaving(false);
     }
@@ -701,6 +715,8 @@ function ToolsTab({
     setSaving(true);
     try {
       await onSave(tools);
+    } catch {
+      // toast handled by parent
     } finally {
       setSaving(false);
     }
@@ -845,6 +861,8 @@ function TriggersTab({
     setSaving(true);
     try {
       await onSave(triggers);
+    } catch {
+      // toast handled by parent
     } finally {
       setSaving(false);
     }
@@ -1050,8 +1068,17 @@ function TasksTab({ agent }: { agent: Agent }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-        Loading tasks...
+      <div className="space-y-2">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 rounded-lg border px-4 py-3">
+            <Skeleton className="h-4 w-4 rounded shrink-0" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-4 w-1/2" />
+              <Skeleton className="h-3 w-1/3" />
+            </div>
+            <Skeleton className="h-4 w-16" />
+          </div>
+        ))}
       </div>
     );
   }
@@ -1346,30 +1373,50 @@ function AgentDetail({
   agent,
   runtimes,
   onUpdate,
-  onDelete,
+  onArchive,
+  onRestore,
 }: {
   agent: Agent;
   runtimes: RuntimeDevice[];
   onUpdate: (id: string, data: Partial<Agent>) => Promise<void>;
-  onDelete: (id: string) => Promise<void>;
+  onArchive: (id: string) => Promise<void>;
+  onRestore: (id: string) => Promise<void>;
 }) {
   const st = statusConfig[agent.status];
   const runtimeDevice = getRuntimeDevice(agent, runtimes);
   const [activeTab, setActiveTab] = useState<DetailTab>("instructions");
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const isArchived = !!agent.archived_at;
 
   return (
     <div className="flex h-full flex-col">
+      {/* Archive Banner */}
+      {isArchived && (
+        <div className="flex items-center gap-2 bg-muted/50 px-4 py-2 text-xs text-muted-foreground border-b">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+          <span className="flex-1">This agent is archived. It cannot be assigned or mentioned.</span>
+          <Button variant="outline" size="sm" className="h-6 text-xs" onClick={() => onRestore(agent.id)}>
+            Restore
+          </Button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-        <ActorAvatar actorType="agent" actorId={agent.id} size={28} className="rounded-md" />
+        <ActorAvatar actorType="agent" actorId={agent.id} size={28} className={`rounded-md ${isArchived ? "opacity-50" : ""}`} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold truncate">{agent.name}</h2>
-            <span className={`flex items-center gap-1.5 text-xs ${st.color}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
-              {st.label}
-            </span>
+            <h2 className={`text-sm font-semibold truncate ${isArchived ? "text-muted-foreground" : ""}`}>{agent.name}</h2>
+            {isArchived ? (
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
+                Archived
+              </span>
+            ) : (
+              <span className={`flex items-center gap-1.5 text-xs ${st.color}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${st.dot}`} />
+                {st.label}
+              </span>
+            )}
             <span className="flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
               {agent.runtime_mode === "cloud" ? (
                 <Cloud className="h-3 w-3" />
@@ -1380,24 +1427,26 @@ function AgentDetail({
             </span>
           </div>
         </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <Button variant="ghost" size="icon-sm" />
-            }
-          >
-            <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              className="text-destructive"
-              onClick={() => setConfirmDelete(true)}
+        {!isArchived && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button variant="ghost" size="icon-sm" />
+              }
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete Agent
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => setConfirmArchive(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Archive Agent
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Tabs */}
@@ -1451,33 +1500,33 @@ function AgentDetail({
         )}
       </div>
 
-      {/* Delete Confirmation */}
-      {confirmDelete && (
-        <Dialog open onOpenChange={(v) => { if (!v) setConfirmDelete(false); }}>
+      {/* Archive Confirmation */}
+      {confirmArchive && (
+        <Dialog open onOpenChange={(v) => { if (!v) setConfirmArchive(false); }}>
           <DialogContent className="max-w-sm" showCloseButton={false}>
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
                 <AlertCircle className="h-5 w-5 text-destructive" />
               </div>
               <DialogHeader className="flex-1 gap-1">
-                <DialogTitle className="text-sm font-semibold">Delete agent?</DialogTitle>
+                <DialogTitle className="text-sm font-semibold">Archive agent?</DialogTitle>
                 <DialogDescription className="text-xs">
-                  This will permanently delete &quot;{agent.name}&quot; and all its configuration.
+                  &quot;{agent.name}&quot; will be archived. It won&apos;t be assignable or mentionable, but all history is preserved. You can restore it later.
                 </DialogDescription>
               </DialogHeader>
             </div>
             <DialogFooter>
-              <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
+              <Button variant="ghost" onClick={() => setConfirmArchive(false)}>
                 Cancel
               </Button>
               <Button
                 variant="destructive"
                 onClick={() => {
-                  setConfirmDelete(false);
-                  onDelete(agent.id);
+                  setConfirmArchive(false);
+                  onArchive(agent.id);
                 }}
               >
-                Delete
+                Archive
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1522,25 +1571,74 @@ export default function AgentsPage() {
   };
 
   const handleUpdate = async (id: string, data: Record<string, unknown>) => {
-    await api.updateAgent(id, data as UpdateAgentRequest);
-    await refreshAgents();
+    try {
+      await api.updateAgent(id, data as UpdateAgentRequest);
+      await refreshAgents();
+      toast.success("Agent updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update agent");
+      throw e;
+    }
   };
 
-  const handleDelete = async (id: string) => {
-    await api.deleteAgent(id);
-    if (selectedId === id) {
-      const remaining = agents.filter((a) => a.id !== id);
-      setSelectedId(remaining[0]?.id ?? "");
+  const handleArchive = async (id: string) => {
+    try {
+      await api.archiveAgent(id);
+      await refreshAgents();
+      toast.success("Agent archived");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to archive agent");
     }
-    await refreshAgents();
+  };
+
+  const handleRestore = async (id: string) => {
+    try {
+      await api.restoreAgent(id);
+      await refreshAgents();
+      toast.success("Agent restored");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to restore agent");
+    }
   };
 
   const selected = agents.find((a) => a.id === selectedId) ?? null;
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 min-h-0 items-center justify-center text-sm text-muted-foreground">
-        Loading...
+      <div className="flex flex-1 min-h-0">
+        {/* List skeleton */}
+        <div className="w-72 border-r">
+          <div className="flex h-12 items-center justify-between border-b px-4">
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-6 w-6 rounded" />
+          </div>
+          <div className="divide-y">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3 px-4 py-3">
+                <Skeleton className="h-8 w-8 rounded-full" />
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-24" />
+                  <Skeleton className="h-3 w-16" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {/* Detail skeleton */}
+        <div className="flex-1 p-6 space-y-6">
+          <div className="flex items-center gap-3">
+            <Skeleton className="h-10 w-10 rounded-full" />
+            <div className="space-y-1.5">
+              <Skeleton className="h-5 w-32" />
+              <Skeleton className="h-3 w-20" />
+            </div>
+          </div>
+          <div className="space-y-3">
+            <Skeleton className="h-8 w-full rounded-lg" />
+            <Skeleton className="h-8 w-full rounded-lg" />
+            <Skeleton className="h-8 w-3/4 rounded-lg" />
+          </div>
+        </div>
       </div>
     );
   }
@@ -1603,7 +1701,8 @@ export default function AgentsPage() {
             agent={selected}
             runtimes={runtimes}
             onUpdate={handleUpdate}
-            onDelete={handleDelete}
+            onArchive={handleArchive}
+            onRestore={handleRestore}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-muted-foreground">

@@ -1,5 +1,10 @@
 -- name: ListAgents :many
 SELECT * FROM agent
+WHERE workspace_id = $1 AND archived_at IS NULL
+ORDER BY created_at ASC;
+
+-- name: ListAllAgents :many
+SELECT * FROM agent
 WHERE workspace_id = $1
 ORDER BY created_at ASC;
 
@@ -37,8 +42,15 @@ UPDATE agent SET
 WHERE id = $1
 RETURNING *;
 
--- name: DeleteAgent :exec
-DELETE FROM agent WHERE id = $1;
+-- name: ArchiveAgent :one
+UPDATE agent SET archived_at = now(), archived_by = $2, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: RestoreAgent :one
+UPDATE agent SET archived_at = NULL, archived_by = NULL, updated_at = now()
+WHERE id = $1
+RETURNING *;
 
 -- name: ListAgentTasks :many
 SELECT * FROM agent_task_queue
@@ -55,16 +67,30 @@ UPDATE agent_task_queue
 SET status = 'cancelled'
 WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running');
 
+-- name: CancelAgentTasksByAgent :exec
+UPDATE agent_task_queue
+SET status = 'cancelled'
+WHERE agent_id = $1 AND status IN ('queued', 'dispatched', 'running');
+
 -- name: GetAgentTask :one
 SELECT * FROM agent_task_queue
 WHERE id = $1;
 
 -- name: ClaimAgentTask :one
+-- Claims the next queued task for an agent, enforcing per-issue serialization:
+-- a task is only claimable when no other task for the same issue is already
+-- dispatched or running. This guarantees serial execution within an issue
+-- while allowing parallel execution across different issues.
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
     SELECT atq.id FROM agent_task_queue atq
     WHERE atq.agent_id = $1 AND atq.status = 'queued'
+      AND NOT EXISTS (
+          SELECT 1 FROM agent_task_queue active
+          WHERE active.issue_id = atq.issue_id
+            AND active.status IN ('dispatched', 'running')
+      )
     ORDER BY atq.priority DESC, atq.created_at ASC
     LIMIT 1
     FOR UPDATE SKIP LOCKED

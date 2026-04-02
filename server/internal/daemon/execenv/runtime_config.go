@@ -10,15 +10,16 @@ import (
 // InjectRuntimeConfig writes the meta skill content into the runtime-specific
 // config file so the agent discovers its environment through its native mechanism.
 //
-// For Claude: writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
-// For Codex:  writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
+// For Claude:   writes {workDir}/CLAUDE.md  (skills discovered natively from .claude/skills/)
+// For Codex:    writes {workDir}/AGENTS.md  (skills discovered natively via CODEX_HOME)
+// For OpenCode: writes {workDir}/AGENTS.md  (skills discovered natively from .config/opencode/skills/)
 func InjectRuntimeConfig(workDir, provider string, ctx TaskContextForEnv) error {
 	content := buildMetaSkillContent(provider, ctx)
 
 	switch provider {
 	case "claude":
 		return os.WriteFile(filepath.Join(workDir, "CLAUDE.md"), []byte(content), 0o644)
-	case "codex":
+	case "codex", "opencode":
 		return os.WriteFile(filepath.Join(workDir, "AGENTS.md"), []byte(content), 0o644)
 	default:
 		// Unknown provider — skip config injection, prompt-only mode.
@@ -48,7 +49,10 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue list [--status X] [--priority X] [--assignee X] --output json` — List issues in workspace\n")
 	b.WriteString("- `multica issue comment list <issue-id> --output json` — List all comments on an issue (includes id, parent_id for threading)\n")
 	b.WriteString("- `multica workspace get --output json` — Get workspace details and context\n")
-	b.WriteString("- `multica agent list --output json` — List agents in workspace\n\n")
+	b.WriteString("- `multica agent list --output json` — List agents in workspace\n")
+	b.WriteString("- `multica issue runs <issue-id> --output json` — List all execution runs for an issue (status, timestamps, errors)\n")
+	b.WriteString("- `multica issue run-messages <task-id> [--since <seq>] --output json` — List messages for a specific execution run (supports incremental fetch)\n")
+	b.WriteString("- `multica attachment download <id> [-o <dir>]` — Download an attachment file locally by ID\n\n")
 
 	b.WriteString("### Write\n")
 	b.WriteString("- `multica issue comment add <issue-id> --content \"...\" [--parent <comment-id>]` — Post a comment (use --parent to reply to a specific comment)\n")
@@ -112,8 +116,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		case "claude":
 			// Claude discovers skills natively from .claude/skills/ — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex":
-			// Codex discovers skills natively via CODEX_HOME/skills/ — just list names.
+		case "codex", "opencode":
+			// Codex and OpenCode discover skills natively from their respective paths — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
 		default:
 			b.WriteString("Detailed skill instructions are in `.agent_context/skills/`. Each subdirectory contains a `SKILL.md`.\n\n")
@@ -123,6 +127,20 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		}
 		b.WriteString("\n")
 	}
+
+	b.WriteString("## Mentions\n\n")
+	b.WriteString("When referencing issues or people in comments, use the mention format so they render as interactive links:\n\n")
+	b.WriteString("- **Issue**: `[MUL-123](mention://issue/<issue-id>)` — renders as a clickable link to the issue\n")
+	b.WriteString("- **Member**: `[@Name](mention://member/<user-id>)` — renders as a styled mention and sends a notification\n")
+	b.WriteString("- **Agent**: `[@Name](mention://agent/<agent-id>)` — renders as a styled mention\n\n")
+	b.WriteString("Use `multica issue list --output json` to look up issue IDs, and `multica workspace members --output json` for member IDs.\n\n")
+
+	b.WriteString("## Attachments\n\n")
+	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
+	b.WriteString("Use the download command to fetch attachment files locally:\n\n")
+	b.WriteString("```\nmultica attachment download <attachment-id>\n```\n\n")
+	b.WriteString("This downloads the file to the current directory and prints the local path. Use `-o <dir>` to save elsewhere.\n")
+	b.WriteString("After downloading, you can read the file directly (e.g. view an image, read a document).\n\n")
 
 	b.WriteString("## Output\n\n")
 	b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")

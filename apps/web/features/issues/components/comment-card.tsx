@@ -13,6 +13,16 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { ReactionBar } from "@/components/common/reaction-bar";
@@ -21,7 +31,7 @@ import { cn } from "@/lib/utils";
 import { useActorName } from "@/features/workspace";
 import { timeAgo } from "@/shared/utils";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
-import { Markdown } from "@/components/markdown/Markdown";
+import { ReadonlyEditor } from "@/components/common/readonly-editor";
 import { FileUploadButton } from "@/components/common/file-upload-button";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 import { ReplyInput } from "./reply-input";
@@ -40,6 +50,45 @@ interface CommentCardProps {
   onEdit: (commentId: string, content: string) => Promise<void>;
   onDelete: (commentId: string) => void;
   onToggleReaction: (commentId: string, emoji: string) => void;
+  /** ID of the comment to highlight (flash animation). */
+  highlightedCommentId?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Shared delete confirmation dialog
+// ---------------------------------------------------------------------------
+
+function DeleteCommentDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+  hasReplies,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+  hasReplies?: boolean;
+}) {
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete comment</AlertDialogTitle>
+          <AlertDialogDescription>
+            {hasReplies
+              ? "This comment and all its replies will be permanently deleted. This cannot be undone."
+              : "This comment will be permanently deleted. This cannot be undone."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction variant="destructive" onClick={onConfirm}>
+            Delete
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +118,7 @@ function CommentRow({
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
   const isTemp = entry.id.startsWith("temp-");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const startEdit = () => {
     cancelledRef.current = false;
@@ -150,7 +200,7 @@ function CommentRow({
                     Edit
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem onClick={() => onDelete(entry.id)} variant="destructive">
+                  <DropdownMenuItem onClick={() => setConfirmDelete(true)} variant="destructive">
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
                   </DropdownMenuItem>
@@ -158,6 +208,11 @@ function CommentRow({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          <DeleteCommentDialog
+            open={confirmDelete}
+            onOpenChange={setConfirmDelete}
+            onConfirm={() => onDelete(entry.id)}
+          />
           </div>
         )}
       </div>
@@ -173,14 +228,14 @@ function CommentRow({
               defaultValue={entry.content ?? ""}
               placeholder="Edit comment..."
               onSubmit={saveEdit}
+              onUploadFile={(file) => uploadWithToast(file, { issueId })}
               debounceMs={100}
             />
           </div>
           <div className="flex items-center justify-between mt-2">
             <FileUploadButton
               size="sm"
-              onUpload={(file) => uploadWithToast(file, { issueId })}
-              onInsert={(result, isImage) => editEditorRef.current?.insertFile(result.filename, result.link, isImage)}
+              onSelect={(file) => editEditorRef.current?.uploadFile(file)}
             />
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" onClick={cancelEdit}>Cancel</Button>
@@ -191,7 +246,7 @@ function CommentRow({
       ) : (
         <>
           <div className="mt-1.5 pl-8 text-sm leading-relaxed text-foreground/85">
-            <Markdown mode="minimal">{entry.content ?? ""}</Markdown>
+            <ReadonlyEditor content={entry.content ?? ""} />
           </div>
           {!isTemp && (
             <ReactionBar
@@ -221,6 +276,7 @@ function CommentCard({
   onEdit,
   onDelete,
   onToggleReaction,
+  highlightedCommentId,
 }: CommentCardProps) {
   const { getActorName } = useActorName();
   const { uploadWithToast } = useFileUpload();
@@ -231,6 +287,7 @@ function CommentCard({
 
   const isOwn = entry.actor_type === "member" && entry.actor_id === currentUserId;
   const isTemp = entry.id.startsWith("temp-");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const startEdit = () => {
     cancelledRef.current = false;
@@ -275,8 +332,10 @@ function CommentCard({
   const contentPreview = (entry.content ?? "").replace(/\n/g, " ").slice(0, 80);
   const reactions = entry.reactions ?? [];
 
+  const isHighlighted = highlightedCommentId === entry.id;
+
   return (
-    <Card className={`!py-0 !gap-0 overflow-hidden${isTemp ? " opacity-60" : ""}`}>
+    <Card className={cn("!py-0 !gap-0 overflow-hidden transition-colors duration-700", isTemp && "opacity-60", isHighlighted && "ring-2 ring-brand/50 bg-brand/5")}>
       <Collapsible open={open} onOpenChange={setOpen}>
         {/* Header — always visible, acts as toggle */}
         <div className="px-4 py-3">
@@ -342,7 +401,7 @@ function CommentCard({
                         Edit
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => onDelete(entry.id)} variant="destructive">
+                      <DropdownMenuItem onClick={() => setConfirmDelete(true)} variant="destructive">
                         <Trash2 className="h-3.5 w-3.5" />
                         Delete
                       </DropdownMenuItem>
@@ -350,6 +409,12 @@ function CommentCard({
                   )}
                 </DropdownMenuContent>
               </DropdownMenu>
+              <DeleteCommentDialog
+                open={confirmDelete}
+                onOpenChange={setConfirmDelete}
+                onConfirm={() => onDelete(entry.id)}
+                hasReplies
+              />
               </div>
             )}
           </div>
@@ -376,8 +441,7 @@ function CommentCard({
                 <div className="flex items-center justify-between mt-2">
                   <FileUploadButton
                     size="sm"
-                    onUpload={(file) => uploadWithToast(file, { issueId })}
-                    onInsert={(result, isImage) => editEditorRef.current?.insertFile(result.filename, result.link, isImage)}
+                    onSelect={(file) => editEditorRef.current?.uploadFile(file)}
                   />
                   <div className="flex items-center gap-2">
                     <Button size="sm" variant="ghost" onClick={cancelEdit}>Cancel</Button>
@@ -388,7 +452,7 @@ function CommentCard({
             ) : (
               <>
                 <div className="pl-10 text-sm leading-relaxed text-foreground/85">
-                  <Markdown mode="minimal">{entry.content ?? ""}</Markdown>
+                  <ReadonlyEditor content={entry.content ?? ""} />
                 </div>
                 {!isTemp && (
                   <ReactionBar
@@ -404,7 +468,7 @@ function CommentCard({
 
           {/* Replies */}
           {allNestedReplies.map((reply) => (
-            <div key={reply.id} className="border-t border-border/50 px-4">
+            <div key={reply.id} id={`comment-${reply.id}`} className={cn("border-t border-border/50 px-4 transition-colors duration-700", highlightedCommentId === reply.id && "bg-brand/5")}>
               <CommentRow
                 issueId={issueId}
                 entry={reply}

@@ -31,6 +31,7 @@ import type {
   RuntimeUsage,
   RuntimeHourlyActivity,
   RuntimePing,
+  RuntimeUpdate,
   TimelineEntry,
   TaskMessagePayload,
   Attachment,
@@ -353,10 +354,11 @@ export class ApiClient {
   }
 
   // Agents
-  async listAgents(params?: { workspace_id?: string }): Promise<Agent[]> {
+  async listAgents(params?: { workspace_id?: string; include_archived?: boolean }): Promise<Agent[]> {
     const search = new URLSearchParams();
     const wsId = params?.workspace_id ?? this.workspaceId;
     if (wsId) search.set("workspace_id", wsId);
+    if (params?.include_archived) search.set("include_archived", "true");
     return this.fetch(`/api/agents?${search}`);
   }
 
@@ -378,8 +380,12 @@ export class ApiClient {
     });
   }
 
-  async deleteAgent(id: string): Promise<void> {
-    await this.fetch(`/api/agents/${id}`, { method: "DELETE" });
+  async archiveAgent(id: string): Promise<Agent> {
+    return this.fetch(`/api/agents/${id}/archive`, { method: "POST" });
+  }
+
+  async restoreAgent(id: string): Promise<Agent> {
+    return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }
 
   async listRuntimes(params?: { workspace_id?: string }): Promise<AgentRuntime[]> {
@@ -405,6 +411,23 @@ export class ApiClient {
 
   async getPingResult(runtimeId: string, pingId: string): Promise<RuntimePing> {
     return this.fetch(`/api/runtimes/${runtimeId}/ping/${pingId}`);
+  }
+
+  async initiateUpdate(
+    runtimeId: string,
+    targetVersion: string,
+  ): Promise<RuntimeUpdate> {
+    return this.fetch(`/api/runtimes/${runtimeId}/update`, {
+      method: "POST",
+      body: JSON.stringify({ target_version: targetVersion }),
+    });
+  }
+
+  async getUpdateResult(
+    runtimeId: string,
+    updateId: string,
+  ): Promise<RuntimeUpdate> {
+    return this.fetch(`/api/runtimes/${runtimeId}/update/${updateId}`);
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {

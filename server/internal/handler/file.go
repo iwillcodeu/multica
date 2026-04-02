@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -17,32 +16,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const maxUploadSize = 10 << 20 // 10 MB
-
-// Allowed MIME type prefixes and exact types for uploads.
-var allowedContentTypes = map[string]bool{
-	"image/png":        true,
-	"image/jpeg":       true,
-	"image/gif":        true,
-	"image/webp":       true,
-	"image/svg+xml":    true,
-	"application/pdf":  true,
-	"text/plain":       true,
-	"text/csv":         true,
-	"application/json": true,
-	"video/mp4":        true,
-	"video/webm":       true,
-	"audio/mpeg":       true,
-	"audio/wav":        true,
-	"application/zip":  true,
-}
-
-func isContentTypeAllowed(ct string) bool {
-	// Normalize: take only the media type, strip parameters like charset.
-	ct = strings.TrimSpace(strings.SplitN(ct, ";", 2)[0])
-	ct = strings.ToLower(ct)
-	return allowedContentTypes[ct]
-}
+const maxUploadSize = 100 << 20 // 100 MB
 
 // ---------------------------------------------------------------------------
 // Response types
@@ -77,7 +51,7 @@ func (h *Handler) attachmentToResponse(a db.Attachment) AttachmentResponse {
 		CreatedAt:    a.CreatedAt.Time.Format("2006-01-02T15:04:05Z07:00"),
 	}
 	if h.CFSigner != nil {
-		resp.DownloadURL = h.CFSigner.SignedURL(a.Url, time.Now().Add(5*time.Minute))
+		resp.DownloadURL = h.CFSigner.SignedURL(a.Url, time.Now().Add(30*time.Minute))
 	}
 	if a.IssueID.Valid {
 		s := uuidToString(a.IssueID)
@@ -148,10 +122,6 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentType := http.DetectContentType(buf[:n])
-	if !isContentTypeAllowed(contentType) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("file type not allowed: %s", contentType))
-		return
-	}
 	// Seek back so the full file is uploaded.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read file")
@@ -245,6 +215,30 @@ func (h *Handler) ListAttachments(w http.ResponseWriter, r *http.Request) {
 		resp[i] = h.attachmentToResponse(a)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------------
+// GetAttachmentByID — GET /api/attachments/{id}
+// ---------------------------------------------------------------------------
+
+func (h *Handler) GetAttachmentByID(w http.ResponseWriter, r *http.Request) {
+	attachmentID := chi.URLParam(r, "id")
+	workspaceID := resolveWorkspaceID(r)
+	if workspaceID == "" {
+		writeError(w, http.StatusBadRequest, "workspace_id is required")
+		return
+	}
+
+	att, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{
+		ID:          parseUUID(attachmentID),
+		WorkspaceID: parseUUID(workspaceID),
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, h.attachmentToResponse(att))
 }
 
 // ---------------------------------------------------------------------------

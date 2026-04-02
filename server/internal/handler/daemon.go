@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -22,10 +23,11 @@ type DaemonRegisterRequest struct {
 	WorkspaceID string `json:"workspace_id"`
 	DaemonID    string `json:"daemon_id"`
 	DeviceName  string `json:"device_name"`
+	CLIVersion  string `json:"cli_version"` // multica CLI version
 	Runtimes    []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
-		Version string `json:"version"`
+		Version string `json:"version"` // agent CLI version (claude/codex)
 		Status  string `json:"status"`
 	} `json:"runtimes"`
 }
@@ -89,7 +91,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			status = "offline"
 		}
 		metadata, _ := json.Marshal(map[string]any{
-			"version": runtime.Version,
+			"version":     runtime.Version,
+			"cli_version": req.CLIVersion,
 		})
 
 		registered, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
@@ -201,6 +204,14 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	// Check for pending ping requests for this runtime.
 	if pending := h.PingStore.PopPending(req.RuntimeID); pending != nil {
 		resp["pending_ping"] = map[string]string{"id": pending.ID}
+	}
+
+	// Check for pending update requests for this runtime.
+	if pending := h.UpdateStore.PopPending(req.RuntimeID); pending != nil {
+		resp["pending_update"] = map[string]string{
+			"id":             pending.ID,
+			"target_version": pending.TargetVersion,
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -483,7 +494,20 @@ func (h *Handler) ListTaskMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := h.Queries.ListTaskMessages(r.Context(), parseUUID(taskID))
+	var messages []db.TaskMessage
+	if sinceStr := r.URL.Query().Get("since"); sinceStr != "" {
+		sinceSeq, parseErr := strconv.Atoi(sinceStr)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "invalid since parameter")
+			return
+		}
+		messages, err = h.Queries.ListTaskMessagesSince(r.Context(), db.ListTaskMessagesSinceParams{
+			TaskID: parseUUID(taskID),
+			Seq:    int32(sinceSeq),
+		})
+	} else {
+		messages, err = h.Queries.ListTaskMessages(r.Context(), parseUUID(taskID))
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list task messages")
 		return
