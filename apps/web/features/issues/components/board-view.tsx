@@ -59,6 +59,7 @@ export function BoardView({
   visibleStatuses,
   hiddenStatuses,
   onMoveIssue,
+  projectId,
 }: {
   issues: Issue[];
   allIssues: Issue[];
@@ -69,6 +70,7 @@ export function BoardView({
     newStatus: IssueStatus,
     newPosition?: number
   ) => void;
+  projectId?: string;
 }) {
   const [activeIssue, setActiveIssue] = useState<Issue | null>(null);
 
@@ -176,6 +178,7 @@ export function BoardView({
             key={status}
             status={status}
             issues={issues.filter((i) => i.status === status)}
+            projectId={projectId}
           />
         ))}
 

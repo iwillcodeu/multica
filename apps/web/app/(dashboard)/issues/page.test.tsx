@@ -5,8 +5,8 @@ import type { Issue } from "@/shared/types";
 
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
-  usePathname: () => "/issues",
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+  usePathname: () => "/projects/proj-1",
 }));
 
 // Mock next/link
@@ -79,6 +79,28 @@ let mockStoreState: {
   updateIssue: (id: string, updates: Partial<Issue>) => void;
   removeIssue: (id: string) => void;
 };
+
+vi.mock("@/features/projects", () => ({
+  useProjectStore: Object.assign(
+    (selector?: any) =>
+      selector
+        ? selector({
+            projects: [
+              {
+                id: "proj-1",
+                workspace_id: "ws-1",
+                name: "Alpha",
+                position: 0,
+                created_at: "2026-01-01T00:00:00Z",
+                updated_at: "2026-01-01T00:00:00Z",
+              },
+            ],
+            loading: false,
+          })
+        : {},
+    { getState: () => ({ projects: [], fetch: vi.fn(), reset: vi.fn() }) },
+  ),
+}));
 
 vi.mock("@/features/issues/store", () => ({
   useIssueStore: Object.assign(
@@ -220,6 +242,7 @@ vi.mock("@dnd-kit/utilities", () => ({
 
 const issueDefaults = {
   parent_issue_id: null,
+  project_id: "proj-1",
   position: 0,
 };
 
@@ -280,7 +303,7 @@ const mockIssues: Issue[] = [
   },
 ];
 
-import IssuesPage from "./page";
+import { IssuesPage } from "@/features/issues/components/issues-page";
 
 describe("IssuesPage", () => {
   beforeEach(() => {
@@ -302,7 +325,7 @@ describe("IssuesPage", () => {
   it("shows loading state initially", () => {
     mockStoreState.loading = true;
     mockStoreState.issues = [];
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
     expect(screen.getAllByRole("generic").some(el => el.getAttribute("data-slot") === "skeleton")).toBe(true);
   });
 
@@ -310,7 +333,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = mockIssues;
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     expect(screen.getByText("Implement auth")).toBeInTheDocument();
     expect(screen.getByText("Design landing page")).toBeInTheDocument();
@@ -321,7 +344,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = mockIssues;
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     expect(screen.getAllByText("Backlog").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Todo").length).toBeGreaterThanOrEqual(1);
@@ -334,7 +357,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = [];
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     expect(screen.getByText("Issues")).toBeInTheDocument();
   });
@@ -343,7 +366,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = [];
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     expect(screen.getByText("All")).toBeInTheDocument();
     expect(screen.getByText("Members")).toBeInTheDocument();
@@ -354,7 +377,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = mockIssues;
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     // Filter and Display are now icon-only buttons, verify they render as buttons
     const buttons = screen.getAllByRole("button");
@@ -365,7 +388,7 @@ describe("IssuesPage", () => {
     mockStoreState.loading = false;
     mockStoreState.issues = [];
 
-    render(<IssuesPage />);
+    render(<IssuesPage projectId="proj-1" />);
 
     // Should still render the board/list view, not a "no issues" message
     expect(screen.queryByText("No matching issues")).not.toBeInTheDocument();

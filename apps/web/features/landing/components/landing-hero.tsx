@@ -37,7 +37,7 @@ export function LandingHero() {
             </p>
 
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-              <Link href={user ? "/issues" : "/login"} className={heroButtonClassName("solid")}>
+              <Link href={user ? "/projects" : "/login"} className={heroButtonClassName("solid")}>
                 {user ? t.header.dashboard : t.hero.cta}
               </Link>
               <Link

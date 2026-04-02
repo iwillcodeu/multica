@@ -13,11 +13,11 @@ test.describe("Authentication", () => {
     );
   });
 
-  test("login and redirect to /issues", async ({ page }) => {
+  test("login and land on a project board", async ({ page }) => {
     await loginAsDefault(page);
 
-    await expect(page).toHaveURL(/\/issues/);
-    await expect(page.locator("text=All Issues")).toBeVisible();
+    await expect(page).toHaveURL(/\/projects\//);
+    await expect(page.getByRole("link", { name: "Projects" }).first()).toBeVisible();
   });
 
   test("unauthenticated user is redirected to /login", async ({ page }) => {
@@ -27,7 +27,7 @@ test.describe("Authentication", () => {
       localStorage.removeItem("multica_workspace_id");
     });
 
-    await page.goto("/issues");
+    await page.goto("/projects");
     await page.waitForURL("**/login", { timeout: 10000 });
   });
 

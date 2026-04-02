@@ -123,6 +123,13 @@ func setupIntegrationTestFixture(ctx context.Context, pool *pgxpool.Pool) (strin
 		return "", "", err
 	}
 
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO project (workspace_id, name, position)
+		VALUES ($1, 'General', 0)
+	`, workspaceID); err != nil {
+		return "", "", err
+	}
+
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (

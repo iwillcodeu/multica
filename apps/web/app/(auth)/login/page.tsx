@@ -56,7 +56,7 @@ function LoginPageContent() {
   // Already authenticated — redirect to dashboard
   useEffect(() => {
     if (!isLoading && user && !searchParams.get("cli_callback")) {
-      router.replace(searchParams.get("next") || "/issues");
+      router.replace(searchParams.get("next") || "/projects");
     }
   }, [isLoading, user, router, searchParams]);
 
@@ -154,7 +154,7 @@ function LoginPageContent() {
         await verifyCode(email, value);
         const wsList = await api.listWorkspaces();
         await hydrateWorkspace(wsList);
-        router.push(searchParams.get("next") || "/issues");
+        router.push(searchParams.get("next") || "/projects");
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Invalid or expired code"

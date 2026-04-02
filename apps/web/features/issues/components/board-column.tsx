@@ -23,9 +23,11 @@ import { DraggableBoardCard } from "./board-card";
 export function BoardColumn({
   status,
   issues,
+  projectId,
 }: {
   status: IssueStatus;
   issues: Issue[];
+  projectId?: string;
 }) {
   const cfg = STATUS_CONFIG[status];
   const { setNodeRef, isOver } = useDroppable({ id: status });
@@ -81,7 +83,12 @@ export function BoardColumn({
                   variant="ghost"
                   size="icon-sm"
                   className="rounded-full text-muted-foreground"
-                  onClick={() => useModalStore.getState().open("create-issue", { status })}
+                  onClick={() =>
+                    useModalStore.getState().open("create-issue", {
+                      status,
+                      ...(projectId ? { project_id: projectId } : {}),
+                    })
+                  }
                 >
                   <Plus className="size-3.5" />
                 </Button>

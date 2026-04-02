@@ -64,6 +64,7 @@ import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
 import { api } from "@/shared/api";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useProjectStore } from "@/features/projects";
 import { useIssueStore } from "@/features/issues";
 import { useIssueTimeline } from "@/features/issues/hooks/use-issue-timeline";
 import { useIssueReactions } from "@/features/issues/hooks/use-issue-reactions";
@@ -171,6 +172,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const workspace = useWorkspaceStore((s) => s.workspace);
+  const projects = useProjectStore((s) => s.projects);
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
   const currentMemberRole = members.find((m) => m.user_id === user?.id)?.role;
@@ -256,7 +258,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
       useIssueStore.getState().removeIssue(issue!.id);
       toast.success("Issue deleted");
       if (onDelete) onDelete();
-      else router.push("/issues");
+      else router.push(`/projects/${issue!.project_id}`);
     } catch {
       toast.error("Failed to delete issue");
       setDeleting(false);
@@ -276,9 +278,9 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
       <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
         <p>This issue does not exist or has been deleted in this workspace.</p>
         {!onDelete && (
-          <Button variant="outline" size="sm" onClick={() => router.push("/issues")}>
+          <Button variant="outline" size="sm" onClick={() => router.push("/projects")}>
             <ChevronLeft className="mr-1 h-3.5 w-3.5" />
-            Back to Issues
+            Back to Projects
           </Button>
         )}
       </div>
@@ -296,10 +298,17 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
             {workspace && (
               <>
                 <Link
-                  href="/issues"
+                  href="/projects"
                   className="text-muted-foreground hover:text-foreground transition-colors truncate shrink-0"
                 >
                   {workspace.name}
+                </Link>
+                <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+                <Link
+                  href={`/projects/${issue.project_id}`}
+                  className="text-muted-foreground hover:text-foreground transition-colors truncate shrink-0 max-w-[140px]"
+                >
+                  {projects.find((p) => p.id === issue.project_id)?.name ?? "Project"}
                 </Link>
                 <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
               </>
@@ -864,6 +873,30 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                           {PRIORITY_CONFIG[p].label}
                         </span>
                         {p === issue.priority && <Check className="ml-auto h-3.5 w-3.5" />}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </PropRow>
+
+              {/* Project */}
+              <PropRow label="Project">
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden max-w-full">
+                    <span className="truncate text-sm">
+                      {projects.find((p) => p.id === issue.project_id)?.name ?? issue.project_id}
+                    </span>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52 max-h-64 overflow-y-auto">
+                    {projects.map((p) => (
+                      <DropdownMenuItem
+                        key={p.id}
+                        onClick={() => handleUpdateField({ project_id: p.id })}
+                      >
+                        <span className="truncate">{p.name}</span>
+                        {p.id === issue.project_id && (
+                          <Check className="ml-auto h-3.5 w-3.5 shrink-0" />
+                        )}
                       </DropdownMenuItem>
                     ))}
                   </DropdownMenuContent>

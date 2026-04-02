@@ -181,7 +181,11 @@ export function MyIssuesPage() {
               onMoveIssue={handleMoveIssue}
             />
           ) : (
-            <ListView issues={issues} visibleStatuses={visibleStatuses} />
+            <ListView
+              issues={issues}
+              visibleStatuses={visibleStatuses}
+              showProjectOnRows
+            />
           )}
         </div>
         {viewMode === "list" && <BatchActionToolbar />}

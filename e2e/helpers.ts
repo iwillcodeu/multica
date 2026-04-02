@@ -20,8 +20,8 @@ export async function loginAsDefault(page: Page) {
   await page.evaluate((t) => {
     localStorage.setItem("multica_token", t);
   }, token);
-  await page.goto("/issues");
-  await page.waitForURL("**/issues", { timeout: 10000 });
+  await page.goto("/projects");
+  await page.waitForURL("**/projects/**", { timeout: 10000 });
 }
 
 /**

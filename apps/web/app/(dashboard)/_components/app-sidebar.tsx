@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   Inbox,
-  ListTodo,
+  FolderKanban,
   Bot,
   Monitor,
   ChevronDown,
@@ -44,11 +44,12 @@ import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { useInboxStore } from "@/features/inbox";
 import { useModalStore } from "@/features/modals";
+import { useProjectStore } from "@/features/projects";
 
 const primaryNav = [
   { href: "/inbox", label: "Inbox", icon: Inbox },
   { href: "/my-issues", label: "My Issues", icon: CircleUser },
-  { href: "/issues", label: "Issues", icon: ListTodo },
+  { href: "/projects", label: "Projects", icon: FolderKanban },
 ];
 
 const workspaceNav = [
@@ -67,6 +68,7 @@ function DraftDot() {
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
+  const projects = useProjectStore((s) => s.projects);
   const user = useAuthStore((s) => s.user);
   const authLogout = useAuthStore((s) => s.logout);
   const workspace = useWorkspaceStore((s) => s.workspace);
@@ -158,7 +160,16 @@ export function AppSidebar() {
             <Tooltip>
               <TooltipTrigger
                 className="relative flex h-7 w-7 items-center justify-center rounded-lg bg-background text-foreground shadow-sm hover:bg-accent"
-                onClick={() => useModalStore.getState().open("create-issue")}
+                onClick={() => {
+                  let projectId: string | undefined;
+                  const m = pathname.match(/^\/projects\/([^/]+)/);
+                  if (m) projectId = m[1];
+                  if (!projectId) projectId = projects[0]?.id;
+                  useModalStore.getState().open(
+                    "create-issue",
+                    projectId ? { project_id: projectId } : {},
+                  );
+                }}
               >
                 <SquarePen className="size-3.5" />
                 <DraftDot />
@@ -174,12 +185,19 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
                 {primaryNav.map((item) => {
-                  const isActive = pathname === item.href;
+                  const isProjects = item.href === "/projects";
+                  const isActive = isProjects
+                    ? pathname === "/projects" || pathname.startsWith("/projects/")
+                    : pathname === item.href;
+                  const projectsHref =
+                    isProjects && projects[0]
+                      ? `/projects/${projects[0].id}`
+                      : item.href;
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton
                         isActive={isActive}
-                        render={<Link href={item.href} />}
+                        render={<Link href={projectsHref} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />

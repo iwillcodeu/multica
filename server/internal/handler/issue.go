@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,7 @@ type IssueResponse struct {
 	DueDate            *string                 `json:"due_date"`
 	CreatedAt          string                  `json:"created_at"`
 	UpdatedAt          string                  `json:"updated_at"`
+	ProjectID          string                  `json:"project_id"`
 	Reactions          []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments        []AttachmentResponse    `json:"attachments,omitempty"`
 }
@@ -76,6 +78,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DueDate:       timestampToPtr(i.DueDate),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		UpdatedAt:     timestampToString(i.UpdatedAt),
+		ProjectID:     uuidToString(i.ProjectID),
 	}
 }
 
@@ -110,6 +113,10 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if a := r.URL.Query().Get("assignee_id"); a != "" {
 		assigneeFilter = parseUUID(a)
 	}
+	var projectFilter pgtype.UUID
+	if p := r.URL.Query().Get("project_id"); p != "" {
+		projectFilter = parseUUID(p)
+	}
 
 	issues, err := h.Queries.ListIssues(ctx, db.ListIssuesParams{
 		WorkspaceID: parseUUID(workspaceID),
@@ -118,11 +125,24 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		Status:      statusFilter,
 		Priority:    priorityFilter,
 		AssigneeID:  assigneeFilter,
+		ProjectID:   projectFilter,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list issues")
 		return
 	}
+
+	projectLog := ""
+	if projectFilter.Valid {
+		projectLog = uuidToString(projectFilter)
+	}
+	slog.Info("issues listed",
+		append(logger.RequestAttrs(r),
+			"workspace_id", workspaceID,
+			"count", len(issues),
+			"project_id_filter", projectLog,
+			"limit", limit,
+			"offset", offset)...)
 
 	prefix := h.getIssuePrefix(ctx, parseUUID(workspaceID))
 	resp := make([]IssueResponse, len(issues))
@@ -178,6 +198,7 @@ type CreateIssueRequest struct {
 	AssigneeID         *string `json:"assignee_id"`
 	ParentIssueID      *string `json:"parent_issue_id"`
 	DueDate            *string `json:"due_date"`
+	ProjectID          *string `json:"project_id"`
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -258,11 +279,18 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	projectID, err := h.resolveProjectForNewIssue(r.Context(), qtx, workspaceID, req.ProjectID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
 	creatorType, actualCreatorID := h.resolveActor(r, creatorID, workspaceID)
 
 	issue, err := qtx.CreateIssue(r.Context(), db.CreateIssueParams{
 		WorkspaceID:        parseUUID(workspaceID),
+		ProjectID:          projectID,
 		Title:              req.Title,
 		Description:        ptrToText(req.Description),
 		Status:             status,
@@ -311,6 +339,7 @@ type UpdateIssueRequest struct {
 	AssigneeID         *string  `json:"assignee_id"`
 	Position           *float64 `json:"position"`
 	DueDate            *string  `json:"due_date"`
+	ProjectID          *string  `json:"project_id"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +418,25 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		} else {
 			params.DueDate = pgtype.Timestamptz{Valid: false} // explicit null = clear date
 		}
+	}
+	if _, ok := rawFields["project_id"]; ok {
+		if req.ProjectID == nil || *req.ProjectID == "" {
+			writeError(w, http.StatusBadRequest, "project_id is required")
+			return
+		}
+		pid := parseUUID(*req.ProjectID)
+		if !pid.Valid {
+			writeError(w, http.StatusBadRequest, "invalid project_id")
+			return
+		}
+		if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+			ID:          pid,
+			WorkspaceID: prevIssue.WorkspaceID,
+		}); err != nil {
+			writeError(w, http.StatusBadRequest, "project not found")
+			return
+		}
+		params.ProjectID = pid
 	}
 
 	// Enforce agent visibility: private agents can only be assigned by owner/admin.
@@ -688,6 +736,22 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 				params.DueDate = pgtype.Timestamptz{Valid: false}
 			}
 		}
+		if _, ok := rawUpdates["project_id"]; ok {
+			if req.Updates.ProjectID == nil || *req.Updates.ProjectID == "" {
+				continue
+			}
+			pid := parseUUID(*req.Updates.ProjectID)
+			if !pid.Valid {
+				continue
+			}
+			if _, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+				ID:          pid,
+				WorkspaceID: parseUUID(workspaceID),
+			}); err != nil {
+				continue
+			}
+			params.ProjectID = pid
+		}
 
 		// Enforce agent visibility for batch assignment.
 		if req.Updates.AssigneeType != nil && *req.Updates.AssigneeType == "agent" && req.Updates.AssigneeID != nil {
@@ -778,4 +842,26 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("batch delete issues", append(logger.RequestAttrs(r), "count", deleted)...)
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+func (h *Handler) resolveProjectForNewIssue(ctx context.Context, qtx *db.Queries, workspaceID string, projectIDPtr *string) (pgtype.UUID, error) {
+	wsUUID := parseUUID(workspaceID)
+	if projectIDPtr != nil && *projectIDPtr != "" {
+		p := parseUUID(*projectIDPtr)
+		if !p.Valid {
+			return pgtype.UUID{}, fmt.Errorf("invalid project_id")
+		}
+		if _, err := qtx.GetProjectInWorkspace(ctx, db.GetProjectInWorkspaceParams{
+			ID:          p,
+			WorkspaceID: wsUUID,
+		}); err != nil {
+			return pgtype.UUID{}, fmt.Errorf("project not found")
+		}
+		return p, nil
+	}
+	proj, err := qtx.GetFirstProjectInWorkspace(ctx, wsUUID)
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("no project in workspace; create a project first")
+	}
+	return proj.ID, nil
 }

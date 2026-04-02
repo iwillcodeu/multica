@@ -80,12 +80,28 @@ const stableStoreIssues = vi.hoisted(() => [
     creator_type: "member",
     creator_id: "user-1",
     parent_issue_id: null,
+    project_id: "proj-1",
     position: 0,
     due_date: "2026-06-01T00:00:00Z",
     created_at: "2026-01-15T00:00:00Z",
     updated_at: "2026-01-20T00:00:00Z",
   },
 ]);
+vi.mock("@/features/projects", () => ({
+  useProjectStore: (selector: (s: any) => any) =>
+    selector({
+      projects: [
+        {
+          id: "proj-1",
+          workspace_id: "ws-1",
+          name: "Alpha",
+          position: 0,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    }),
+}));
 vi.mock("@/features/issues", () => ({
   useIssueStore: Object.assign(
     (selector: (s: any) => any) => selector({ issues: stableStoreIssues }),
@@ -181,6 +197,7 @@ const mockIssue: Issue = {
   creator_type: "member",
   creator_id: "user-1",
   parent_issue_id: null,
+  project_id: "proj-1",
   position: 0,
   due_date: "2026-06-01T00:00:00Z",
   created_at: "2026-01-15T00:00:00Z",
@@ -357,6 +374,6 @@ describe("IssueDetailPage", () => {
     });
 
     const wsLink = screen.getByText("Test WS");
-    expect(wsLink.closest("a")).toHaveAttribute("href", "/issues");
+    expect(wsLink.closest("a")).toHaveAttribute("href", "/projects");
   });
 });

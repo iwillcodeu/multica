@@ -152,6 +152,17 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
 
+			// Projects (per-workspace issue boards)
+			r.Route("/api/projects", func(r chi.Router) {
+				r.Get("/", h.ListProjects)
+				r.Post("/", h.CreateProject)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Put("/", h.UpdateProject)
+					r.Patch("/", h.UpdateProject)
+					r.Delete("/", h.DeleteProject)
+				})
+			})
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/", h.ListIssues)

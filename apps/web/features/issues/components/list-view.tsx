@@ -17,9 +17,13 @@ import { ListRow } from "./list-row";
 export function ListView({
   issues,
   visibleStatuses,
+  projectId,
+  showProjectOnRows,
 }: {
   issues: Issue[];
   visibleStatuses: IssueStatus[];
+  projectId?: string;
+  showProjectOnRows?: boolean;
 }) {
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
@@ -113,15 +117,16 @@ export function ListView({
                           size="icon-sm"
                           className="rounded-full text-muted-foreground opacity-0 group-hover/header:opacity-100 transition-opacity"
                           onClick={() =>
-                            useModalStore
-                              .getState()
-                              .open("create-issue", { status })
+                            useModalStore.getState().open("create-issue", {
+                              status,
+                              ...(projectId ? { project_id: projectId } : {}),
+                            })
                           }
-                        />
+                        >
+                          <Plus className="size-3.5" />
+                        </Button>
                       }
-                    >
-                      <Plus className="size-3.5" />
-                    </TooltipTrigger>
+                    />
                     <TooltipContent>Add issue</TooltipContent>
                   </Tooltip>
                 </div>
@@ -129,7 +134,11 @@ export function ListView({
               <Accordion.Panel className="pt-1">
                 {statusIssues.length > 0 ? (
                   statusIssues.map((issue) => (
-                    <ListRow key={issue.id} issue={issue} />
+                    <ListRow
+                      key={issue.id}
+                      issue={issue}
+                      showProject={showProjectOnRows}
+                    />
                   ))
                 ) : (
                   <p className="py-6 text-center text-xs text-muted-foreground">

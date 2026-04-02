@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { Workspace, MemberWithUser, Agent, Skill } from "@/shared/types";
 import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
+import { useProjectStore } from "@/features/projects";
 import { useRuntimeStore } from "@/features/runtimes";
 import { api } from "@/shared/api";
 import { createLogger } from "@/shared/logger";
@@ -67,6 +68,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       api.setWorkspaceId(null);
       localStorage.removeItem("multica_workspace_id");
       set({ workspace: null, members: [], agents: [], skills: [] });
+      useProjectStore.getState().reset();
       return null;
     }
 
@@ -79,8 +81,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       api.listMembers(nextWorkspace.id),
       api.listAgents({ workspace_id: nextWorkspace.id }),
       api.listSkills().catch(() => [] as Skill[]),
+    ]);
+    await Promise.all([
       useIssueStore.getState().fetch(),
       useInboxStore.getState().fetch(),
+      useProjectStore.getState().fetch(),
     ]);
     logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
     set({ members: nextMembers, agents: nextAgents, skills: nextSkills });
@@ -105,6 +110,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     useIssueStore.getState().setIssues([]);
     useInboxStore.getState().setItems([]);
     useRuntimeStore.getState().setRuntimes([]);
+    useProjectStore.getState().reset();
     set({ workspace: ws, members: [], agents: [], skills: [] });
 
     await hydrateWorkspace(workspaces, ws.id);
@@ -204,6 +210,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   clearWorkspace: () => {
     api.setWorkspaceId(null);
     localStorage.removeItem("multica_workspace_id");
+    useProjectStore.getState().reset();
     set({ workspace: null, workspaces: [], members: [], agents: [], skills: [] });
   },
 }));

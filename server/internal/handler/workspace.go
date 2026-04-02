@@ -187,6 +187,16 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	_, err = qtx.CreateProject(r.Context(), db.CreateProjectParams{
+		WorkspaceID: ws.ID,
+		Name:        "General",
+		Position:    0,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create default project: "+err.Error())
+		return
+	}
+
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return

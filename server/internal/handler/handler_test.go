@@ -104,6 +104,13 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 		return "", "", err
 	}
 
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO project (workspace_id, name, position)
+		VALUES ($1, 'General', 0)
+	`, workspaceID); err != nil {
+		return "", "", err
+	}
+
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
@@ -625,8 +632,9 @@ func TestResolveActor(t *testing.T) {
 	// Create a task for the agent so we can test X-Task-ID validation.
 	var issueID string
 	err = testPool.QueryRow(ctx,
-		`INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number, position)
-		 VALUES ($1, 'resolveActor test', 'todo', 'none', 'member', $2, 9999, 0)
+		`INSERT INTO issue (workspace_id, project_id, title, status, priority, creator_type, creator_id, number, position)
+		 SELECT $1, p.id, 'resolveActor test', 'todo', 'none', 'member', $2, 9999, 0
+		 FROM project p WHERE p.workspace_id = $1 ORDER BY p.position ASC LIMIT 1
 		 RETURNING id`, testWorkspaceID, testUserID,
 	).Scan(&issueID)
 	if err != nil {

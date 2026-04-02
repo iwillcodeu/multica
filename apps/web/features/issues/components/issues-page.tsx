@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ChevronRight } from "lucide-react";
 import type { IssueStatus } from "@/shared/types";
@@ -13,6 +15,7 @@ import { filterIssues } from "@/features/issues/utils/filter";
 import { BOARD_STATUSES } from "@/features/issues/config";
 import { useWorkspaceStore } from "@/features/workspace";
 import { WorkspaceAvatar } from "@/features/workspace";
+import { useProjectStore } from "@/features/projects";
 import { api } from "@/shared/api";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { IssuesHeader } from "./issues-header";
@@ -20,9 +23,24 @@ import { BoardView } from "./board-view";
 import { ListView } from "./list-view";
 import { BatchActionToolbar } from "./batch-action-toolbar";
 
-export function IssuesPage() {
-  const allIssues = useIssueStore((s) => s.issues);
-  const loading = useIssueStore((s) => s.loading);
+export function IssuesPage({ projectId }: { projectId?: string | null }) {
+  const router = useRouter();
+  const storeIssues = useIssueStore((s) => s.issues);
+  const issuesLoading = useIssueStore((s) => s.loading);
+  const projects = useProjectStore((s) => s.projects);
+  const projectsLoading = useProjectStore((s) => s.loading);
+  const loading = issuesLoading || projectsLoading;
+
+  const allIssues = useMemo(() => {
+    if (!projectId) return storeIssues;
+    return storeIssues.filter((i) => i.project_id === projectId);
+  }, [storeIssues, projectId]);
+
+  const projectLabel = useMemo(() => {
+    if (!projectId) return "Issues";
+    return projects.find((p) => p.id === projectId)?.name ?? "Project";
+  }, [projectId, projects]);
+
   const workspace = useWorkspaceStore((s) => s.workspace);
   const scope = useIssuesScopeStore((s) => s.scope);
   const viewMode = useIssueViewStore((s) => s.viewMode);
@@ -35,6 +53,14 @@ export function IssuesPage() {
   useEffect(() => {
     initFilterWorkspaceSync();
   }, []);
+
+  useEffect(() => {
+    if (!projectId || projectsLoading) return;
+    const exists = projects.some((p) => p.id === projectId);
+    if (!exists && projects.length > 0) {
+      router.replace(`/projects/${projects[0]!.id}`);
+    }
+  }, [projectId, projects, projectsLoading, router]);
 
   useEffect(() => {
     useIssueSelectionStore.getState().clear();
@@ -123,7 +149,18 @@ export function IssuesPage() {
           {workspace?.name ?? "Workspace"}
         </span>
         <ChevronRight className="h-3 w-3 text-muted-foreground" />
-        <span className="text-sm font-medium">Issues</span>
+        <Link
+          href="/projects"
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+        >
+          Projects
+        </Link>
+        {projectId && (
+          <>
+            <ChevronRight className="h-3 w-3 text-muted-foreground/50" />
+            <span className="text-sm font-medium truncate">{projectLabel}</span>
+          </>
+        )}
       </div>
 
       {/* Header 2: Scope tabs + filters */}
@@ -139,9 +176,14 @@ export function IssuesPage() {
               visibleStatuses={visibleStatuses}
               hiddenStatuses={hiddenStatuses}
               onMoveIssue={handleMoveIssue}
+              projectId={projectId ?? undefined}
             />
           ) : (
-            <ListView issues={issues} visibleStatuses={visibleStatuses} />
+            <ListView
+              issues={issues}
+              visibleStatuses={visibleStatuses}
+              projectId={projectId ?? undefined}
+            />
           )}
         </div>
         {viewMode === "list" && <BatchActionToolbar />}

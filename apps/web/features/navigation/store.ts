@@ -13,7 +13,7 @@ interface NavigationState {
 export const useNavigationStore = create<NavigationState>()(
   persist(
     (set) => ({
-      lastPath: "/issues",
+      lastPath: "/projects",
 
       onPathChange: (path: string) => {
         if (!EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) {

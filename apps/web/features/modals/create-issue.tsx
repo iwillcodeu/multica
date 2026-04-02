@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useRef, useMemo } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { CalendarDays, Check, ChevronRight, Maximize2, Minimize2, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ import { TitleEditor } from "@/components/common/title-editor";
 import { StatusIcon, PriorityIcon } from "@/features/issues/components";
 import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
+import { useProjectStore } from "@/features/projects";
 import { useIssueStore } from "@/features/issues";
 import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import { api } from "@/shared/api";
@@ -67,7 +68,17 @@ function PillButton({
 
 export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?: Record<string, unknown> | null }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const projects = useProjectStore((s) => s.projects);
   const workspaceName = useWorkspaceStore((s) => s.workspace?.name);
+
+  const resolvedProjectId = useMemo(() => {
+    const fromModal = data?.project_id;
+    if (typeof fromModal === "string" && fromModal) return fromModal;
+    const m = pathname.match(/^\/projects\/([^/]+)/);
+    if (m) return m[1];
+    return projects[0]?.id;
+  }, [data, pathname, projects]);
   const members = useWorkspaceStore((s) => s.members);
   const agents = useWorkspaceStore((s) => s.agents);
   const { getActorName } = useActorName();
@@ -130,6 +141,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         assignee_type: assigneeType,
         assignee_id: assigneeId,
         due_date: dueDate || undefined,
+        ...(resolvedProjectId ? { project_id: resolvedProjectId } : {}),
       });
       useIssueStore.getState().addIssue(issue);
       clearDraft();

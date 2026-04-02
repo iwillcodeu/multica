@@ -1,4 +1,5 @@
 import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+import type { Project } from "./project";
 import type { MemberRole } from "./workspace";
 
 // Issue API
@@ -11,6 +12,7 @@ export interface CreateIssueRequest {
   assignee_id?: string;
   parent_issue_id?: string;
   due_date?: string;
+  project_id?: string;
 }
 
 export interface UpdateIssueRequest {
@@ -22,6 +24,7 @@ export interface UpdateIssueRequest {
   assignee_id?: string | null;
   position?: number;
   due_date?: string | null;
+  project_id?: string;
 }
 
 export interface ListIssuesParams {
@@ -31,11 +34,26 @@ export interface ListIssuesParams {
   status?: IssueStatus;
   priority?: IssuePriority;
   assignee_id?: string;
+  project_id?: string;
 }
 
 export interface ListIssuesResponse {
   issues: Issue[];
   total: number;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  position?: number;
+}
+
+export interface UpdateProjectRequest {
+  name?: string;
+  position?: number;
+}
+
+export interface ListProjectsResponse {
+  projects: Project[];
 }
 
 export interface UpdateMeRequest {
