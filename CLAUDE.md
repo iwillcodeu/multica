@@ -125,6 +125,11 @@ make test-local       # Go tests without Docker preflight
 make setup-worktree-local
 make start-worktree-local  # uses .env.worktree
 
+# Deploy
+make deploy-docker
+make deploy-local-frontend / deploy-local-backend
+make deploy-remote-frontend / deploy-remote-backend
+
 # Frontend
 pnpm install
 pnpm dev:web          # Next.js dev server (port 3000)

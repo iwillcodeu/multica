@@ -129,6 +129,12 @@ make test-local       # Go tests without Docker preflight
 make setup-worktree-local
 make start-worktree-local  # uses .env.worktree
 
+# Deploy (scripts/deploy/)
+make deploy-docker
+make deploy-local-frontend / make deploy-local-backend
+make deploy-remote-frontend / make deploy-remote-backend   # DEPLOY_HOST, NO_MIGRATE=1
+# First-time Ubuntu: scripts/deploy/ubuntu-noble-native.sh, apply-public-url-on-server.sh
+
 # Frontend
 pnpm install
 pnpm dev:web          # Next.js dev server (port 3000)

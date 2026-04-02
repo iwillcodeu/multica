@@ -20,26 +20,45 @@ The fastest way to get started: [multica.ai](https://multica.ai)
 
 ### Self-Host
 
-Run Multica on your own infrastructure. See the [Self-Hosting Guide](SELF_HOSTING.md) for full instructions.
+More detail: [SELF_HOSTING.md](SELF_HOSTING.md), [AGENTS.md](AGENTS.md). Deployment is split into **three** flows; each has dedicated scripts under `scripts/deploy/`.
 
-Quick start with Docker:
+#### 1. Docker deployment
+
+Docker runs PostgreSQL; this machine runs the Go API and Next dev server (frontend hot reload).
 
 ```bash
-git clone https://github.com/multica-ai/multica.git
-cd multica
-cp .env.example .env
-# Edit .env — at minimum, change JWT_SECRET
-
-# Start PostgreSQL
-docker compose up -d
-
-# Build and run the backend
-cd server && go run ./cmd/migrate up && cd ..
-make start
-
-# Alternative: local PostgreSQL (Homebrew, etc.) — no Docker; set DATABASE_URL in .env, then:
-# make setup-local && make start-local
+cp .env.example .env   # set JWT_SECRET etc.
+./scripts/deploy/deploy-docker.sh
+# equivalent: make deploy-docker
 ```
+
+Requires: Docker, Go, pnpm, `.env`.
+
+#### 2. Local deployment (e.g. Mac + Homebrew Postgres)
+
+Use **two terminals**: backend first, then frontend.
+
+- **2.1 Frontend** — `pnpm install`, production `pnpm build`, `next start` on `127.0.0.1`: `./scripts/deploy/deploy-local-frontend.sh` (or `make deploy-local-frontend`).
+- **2.2 Backend** — DB check, `migrate up`, `go build`, run `./bin/server`: `./scripts/deploy/deploy-local-backend.sh` (or `make deploy-local-backend`).
+
+Configure `.env` (`DATABASE_URL`, `JWT_SECRET`). If Postgres is only reachable via Docker on this Mac, run backend with `SKIP_LOCAL_PG_CHECK=1 ./scripts/deploy/deploy-local-backend.sh`.
+
+#### 3. Remote deployment (Ubuntu, e.g. `chandao`)
+
+**First time on the server (as root):** install tree under `/opt/multica` (do **not** copy your laptop `.env` over production). Free port 80 if needed: `./scripts/deploy/disable-docker-on-server.sh`. Bootstrap stack: `./scripts/deploy/ubuntu-noble-native.sh` (see file header). Set public URLs: `./scripts/deploy/apply-public-url-on-server.sh`. DNS + TLS (e.g. `certbot --nginx`) as usual.
+
+**Day-to-day from your Mac:**
+
+- **3.1 Frontend** — Mac standalone build, rsync, restart `multica-web`: `./scripts/deploy/deploy-remote-frontend.sh` (or `make deploy-remote-frontend`).
+- **3.2 Backend** — Linux cross-compile, rsync `server/` + binaries, `migrate up`, restart `multica-server`: `./scripts/deploy/deploy-remote-backend.sh` (or `make deploy-remote-backend`).
+
+Environment: `DEPLOY_HOST` (default `chandao`), `DEPLOY_REMOTE_DIR` (default `/opt/multica`), `NO_MIGRATE=1` to skip migrations. Frontend build env: `scripts/deploy/pmo.chandao.web.env` or `.env.chandao.deploy` — see `scripts/deploy/env.chandao.web.example`.
+
+#### Backend logs
+
+- **Local:** logs in the terminal running the API; optional `LOG_LEVEL=debug|info|warn|error` in `.env`.
+- **systemd:** `journalctl -u multica-server -f` (API), `journalctl -u multica-web -f` (Next).
+- **Nginx:** `/var/log/nginx/access.log`, `error.log`.
 
 ## CLI
 

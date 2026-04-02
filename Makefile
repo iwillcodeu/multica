@@ -1,4 +1,4 @@
-.PHONY: dev dev-local daemon cli multica build test test-local migrate-up migrate-down migrate-up-local migrate-down-local sqlc seed clean setup setup-local setup-worktree-local start start-local start-worktree-local stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down
+.PHONY: dev dev-local daemon cli multica build test test-local migrate-up migrate-down migrate-up-local migrate-down-local sqlc seed clean setup setup-local setup-worktree-local start start-local start-worktree-local stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down deploy-docker deploy-local-frontend deploy-local-backend deploy-remote-frontend deploy-remote-backend
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -204,6 +204,21 @@ migrate-down-local:
 
 sqlc:
 	cd server && sqlc generate
+
+deploy-docker:
+	@bash scripts/deploy/deploy-docker.sh
+
+deploy-local-frontend:
+	@bash scripts/deploy/deploy-local-frontend.sh
+
+deploy-local-backend:
+	@bash scripts/deploy/deploy-local-backend.sh
+
+deploy-remote-frontend:
+	@bash scripts/deploy/deploy-remote-frontend.sh
+
+deploy-remote-backend:
+	@bash scripts/deploy/deploy-remote-backend.sh
 
 # Cleanup
 clean:

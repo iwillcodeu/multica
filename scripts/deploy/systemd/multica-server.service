@@ -1,0 +1,15 @@
+[Unit]
+Description=Multica Go API server
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/multica/server
+EnvironmentFile=/opt/multica/.env
+ExecStart=/opt/multica/server/bin/server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

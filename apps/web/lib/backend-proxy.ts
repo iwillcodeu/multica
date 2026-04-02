@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { randomRequestId8 } from "@/shared/random-id";
+
 /** Same default as `next.config.ts` rewrites — always the Go server, never the Next dev port. */
 export function backendOriginForProxy(): string {
   return (process.env.REMOTE_API_URL || "http://localhost:8080").replace(/\/+$/, "");
@@ -25,7 +27,7 @@ export async function proxyPostToBackend(
   if (cookie) headers.set("Cookie", cookie);
   headers.set(
     "X-Request-ID",
-    req.headers.get("x-request-id") ?? crypto.randomUUID().slice(0, 8),
+    req.headers.get("x-request-id") ?? randomRequestId8(),
   );
 
   const res = await fetch(`${origin}${backendPath}`, {

@@ -1,0 +1,17 @@
+[Unit]
+Description=Multica Next.js (production)
+After=network-online.target multica-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/opt/multica/.env
+Environment=NODE_ENV=production
+Environment=NEXT_TELEMETRY_DISABLED=1
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/local/bin/multica-web-start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
