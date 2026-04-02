@@ -1,14 +1,21 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Loader2, Save } from "lucide-react";
+import { Camera, Loader2, Save, Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { api } from "@/shared/api";
+import { validateDisplayNameInput } from "@/shared/display-name";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
 
 export function AccountTab() {
@@ -17,6 +24,11 @@ export function AccountTab() {
 
   const [profileName, setProfileName] = useState(user?.name ?? "");
   const [profileSaving, setProfileSaving] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [currentPasswordVisible, setCurrentPasswordVisible] = useState(false);
+  const [newPasswordVisible, setNewPasswordVisible] = useState(false);
   const { upload, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -48,15 +60,45 @@ export function AccountTab() {
   };
 
   const handleProfileSave = async () => {
+    const nameErr = validateDisplayNameInput(profileName);
+    if (nameErr) {
+      toast.error(nameErr);
+      return;
+    }
     setProfileSaving(true);
     try {
-      const updated = await api.updateMe({ name: profileName });
+      const updated = await api.updateMe({ name: profileName.trim() });
       setUser(updated);
       toast.success("Profile updated");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to update profile");
     } finally {
       setProfileSaving(false);
+    }
+  };
+
+  const handlePasswordSave = async () => {
+    const np = newPassword.trim();
+    if (np.length < 8) {
+      toast.error("New password must be at least 8 characters");
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      const updated = await api.changeMyPassword({
+        ...(user?.has_password ? { current_password: currentPassword } : {}),
+        new_password: np,
+      });
+      setUser(updated);
+      setCurrentPassword("");
+      setNewPassword("");
+      setCurrentPasswordVisible(false);
+      setNewPasswordVisible(false);
+      toast.success("Password updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update password");
+    } finally {
+      setPasswordSaving(false);
     }
   };
 
@@ -107,7 +149,9 @@ export function AccountTab() {
             </div>
 
             <div>
-              <Label className="text-xs text-muted-foreground">Name</Label>
+              <Label className="text-xs text-muted-foreground">
+                Display name (unique, max 20 units; each Chinese character counts as 2)
+              </Label>
               <Input
                 type="search"
                 value={profileName}
@@ -123,6 +167,83 @@ export function AccountTab() {
               >
                 <Save className="h-3 w-3" />
                 {profileSaving ? "Updating..." : "Update Profile"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">Password</h2>
+        <Card>
+          <CardContent className="space-y-4">
+            {user?.has_password && (
+              <div>
+                <Label className="text-xs text-muted-foreground">Current password</Label>
+                <InputGroup className="mt-1 max-w-md">
+                  <InputGroupInput
+                    type={currentPasswordVisible ? "text" : "password"}
+                    autoComplete="current-password"
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={currentPasswordVisible ? "Hide password" : "Show password"}
+                      onClick={() => setCurrentPasswordVisible((v) => !v)}
+                    >
+                      {currentPasswordVisible ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </div>
+            )}
+            <div>
+              <Label className="text-xs text-muted-foreground">New password</Label>
+              <InputGroup className="mt-1 max-w-md">
+                <InputGroupInput
+                  type={newPasswordVisible ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  placeholder="At least 8 characters"
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={newPasswordVisible ? "Hide password" : "Show password"}
+                    onClick={() => setNewPasswordVisible((v) => !v)}
+                  >
+                    {newPasswordVisible ? (
+                      <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </div>
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => void handlePasswordSave()}
+                disabled={
+                  passwordSaving ||
+                  newPassword.trim().length < 8 ||
+                  (!!user?.has_password && !currentPassword.trim())
+                }
+              >
+                {passwordSaving ? "Updating…" : user?.has_password ? "Change password" : "Set password"}
               </Button>
             </div>
           </CardContent>

@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -9,7 +12,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/userdisplay"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -328,8 +333,9 @@ func (h *Handler) ListMembersWithUser(w http.ResponseWriter, r *http.Request) {
 }
 
 type CreateMemberRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
+	Email    string  `json:"email"`
+	Role     string  `json:"role"`
+	Password *string `json:"password"`
 }
 
 func memberWithUserResponse(member db.Member, user db.User) MemberWithUserResponse {
@@ -359,10 +365,41 @@ func normalizeMemberRole(role string) (string, bool) {
 	}
 }
 
+func (h *Handler) pickProvisionDisplayName(ctx context.Context, email string) (string, error) {
+	local := email
+	if at := strings.Index(email, "@"); at > 0 {
+		local = email[:at]
+	}
+	base := userdisplay.TruncateToMaxUnits(local)
+	if base == "" {
+		base = "user"
+	}
+	name := base
+	for i := 0; i < 50; i++ {
+		taken, err := h.Queries.IsDisplayNameTaken(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if !taken {
+			return name, nil
+		}
+		name = userdisplay.TruncateToMaxUnits(fmt.Sprintf("%s-%d", base, i+1))
+		if name == "" {
+			name = fmt.Sprintf("u%d", i+1)
+		}
+	}
+	return "", errors.New("could not allocate unique display name")
+}
+
 func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
 	requester, ok := h.workspaceMember(w, r, workspaceID)
 	if !ok {
+		return
+	}
+
+	if requester.Role != "owner" && requester.Role != "admin" {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
@@ -378,6 +415,13 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Password != nil && strings.TrimSpace(*req.Password) != "" {
+		if err := auth.ValidatePasswordSetting(strings.TrimSpace(*req.Password)); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
 	role, valid := normalizeMemberRole(req.Role)
 	if !valid {
 		writeError(w, http.StatusBadRequest, "invalid member role")
@@ -391,9 +435,14 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Queries.GetUserByEmail(r.Context(), email)
 	if err != nil {
 		if isNotFound(err) {
-			// Auto-create user with email so they can be invited before signing up
+			provisionName, perr := h.pickProvisionDisplayName(r.Context(), email)
+			if perr != nil {
+				slog.Warn("provision display name failed", append(logger.RequestAttrs(r), "error", perr)...)
+				writeError(w, http.StatusInternalServerError, "failed to create user")
+				return
+			}
 			user, err = h.Queries.CreateUser(r.Context(), db.CreateUserParams{
-				Name:  email,
+				Name:  provisionName,
 				Email: email,
 			})
 			if err != nil {
@@ -401,6 +450,26 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
+			writeError(w, http.StatusInternalServerError, "failed to load user")
+			return
+		}
+	}
+
+	if req.Password != nil && strings.TrimSpace(*req.Password) != "" {
+		hashed, herr := auth.HashPassword(strings.TrimSpace(*req.Password))
+		if herr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set password")
+			return
+		}
+		if err := h.Queries.SetUserPasswordHash(r.Context(), db.SetUserPasswordHashParams{
+			ID:           user.ID,
+			PasswordHash: pgtype.Text{String: hashed, Valid: true},
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set password")
+			return
+		}
+		user, err = h.Queries.GetUser(r.Context(), user.ID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load user")
 			return
 		}
@@ -433,7 +502,9 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateMemberRequest struct {
-	Role string `json:"role"`
+	Role     *string `json:"role"`
+	Name     *string `json:"name"`
+	Password *string `json:"password"`
 }
 
 func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
@@ -455,47 +526,128 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.Role) == "" {
-		writeError(w, http.StatusBadRequest, "role is required")
+
+	roleUpdate := req.Role != nil && strings.TrimSpace(*req.Role) != ""
+	nameUpdate := req.Name != nil
+	passwordUpdate := req.Password != nil && strings.TrimSpace(*req.Password) != ""
+
+	if !roleUpdate && !nameUpdate && !passwordUpdate {
+		writeError(w, http.StatusBadRequest, "no updates")
 		return
 	}
 
-	role, valid := normalizeMemberRole(req.Role)
-	if !valid {
-		writeError(w, http.StatusBadRequest, "invalid member role")
-		return
-	}
-
-	if (target.Role == "owner" || role == "owner") && requester.Role != "owner" {
+	if (nameUpdate || passwordUpdate) && requester.Role != "owner" && requester.Role != "admin" {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
-	if target.Role == "owner" && role != "owner" {
-		members, err := h.Queries.ListMembers(r.Context(), target.WorkspaceID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to update member")
-			return
-		}
-		if countOwners(members) <= 1 {
-			writeError(w, http.StatusBadRequest, "workspace must have at least one owner")
-			return
-		}
-	}
+	updatedMember := target
 
-	updatedMember, err := h.Queries.UpdateMemberRole(r.Context(), db.UpdateMemberRoleParams{
-		ID:   target.ID,
-		Role: role,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update member")
-		return
+	if roleUpdate {
+		role, valid := normalizeMemberRole(strings.TrimSpace(*req.Role))
+		if !valid {
+			writeError(w, http.StatusBadRequest, "invalid member role")
+			return
+		}
+
+		if role != target.Role {
+			if (target.Role == "owner" || role == "owner") && requester.Role != "owner" {
+				writeError(w, http.StatusForbidden, "insufficient permissions")
+				return
+			}
+
+			if target.Role == "owner" && role != "owner" {
+				members, err := h.Queries.ListMembers(r.Context(), target.WorkspaceID)
+				if err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to update member")
+					return
+				}
+				if countOwners(members) <= 1 {
+					writeError(w, http.StatusBadRequest, "workspace must have at least one owner")
+					return
+				}
+			}
+
+			updatedMember, err = h.Queries.UpdateMemberRole(r.Context(), db.UpdateMemberRoleParams{
+				ID:   target.ID,
+				Role: role,
+			})
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to update member")
+				return
+			}
+		}
 	}
 
 	user, err := h.Queries.GetUser(r.Context(), updatedMember.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load member")
 		return
+	}
+
+	if nameUpdate {
+		n := strings.TrimSpace(*req.Name)
+		if err := userdisplay.ValidateDisplayName(n); err != nil {
+			if errors.Is(err, userdisplay.ErrEmptyDisplayName) {
+				writeError(w, http.StatusBadRequest, "name is required")
+				return
+			}
+			if errors.Is(err, userdisplay.ErrDisplayNameLong) {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid name")
+			return
+		}
+		taken, err := h.Queries.IsDisplayNameTakenByOther(r.Context(), db.IsDisplayNameTakenByOtherParams{
+			CheckName: n,
+			ExcludeID: user.ID,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check name")
+			return
+		}
+		if taken {
+			writeError(w, http.StatusConflict, "display name already taken")
+			return
+		}
+		user, err = h.Queries.UpdateUserName(r.Context(), db.UpdateUserNameParams{
+			ID:   user.ID,
+			Name: n,
+		})
+		if err != nil {
+			if isUniqueViolation(err) {
+				writeError(w, http.StatusConflict, "display name already taken")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to update name")
+			return
+		}
+	}
+
+	if passwordUpdate {
+		pw := strings.TrimSpace(*req.Password)
+		if err := auth.ValidatePasswordSetting(pw); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		hashed, err := auth.HashPassword(pw)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set password")
+			return
+		}
+		if err := h.Queries.SetUserPasswordHash(r.Context(), db.SetUserPasswordHashParams{
+			ID:           user.ID,
+			PasswordHash: pgtype.Text{String: hashed, Valid: true},
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to set password")
+			return
+		}
+		user, err = h.Queries.GetUser(r.Context(), user.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load member")
+			return
+		}
 	}
 
 	userID := requestUserID(r)

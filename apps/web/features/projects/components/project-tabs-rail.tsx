@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { canCreateOrRenameProjects, useCurrentWorkspaceMember } from "@/features/workspace";
 import { useProjectStore } from "../store";
 
 export function ProjectTabsRail() {
@@ -23,6 +24,8 @@ export function ProjectTabsRail() {
   const router = useRouter();
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
+  const member = useCurrentWorkspaceMember();
+  const canAddProject = canCreateOrRenameProjects(member?.role);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -79,22 +82,24 @@ export function ProjectTabsRail() {
             </Tooltip>
           );
         })}
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-9 shrink-0 text-muted-foreground"
-                onClick={() => setDialogOpen(true)}
-              >
-                <Plus className="size-4" />
-              </Button>
-            }
-          />
-          <TooltipContent side="right">New project</TooltipContent>
-        </Tooltip>
+        {canAddProject && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 shrink-0 text-muted-foreground"
+                  onClick={() => setDialogOpen(true)}
+                >
+                  <Plus className="size-4" />
+                </Button>
+              }
+            />
+            <TooltipContent side="right">New project</TooltipContent>
+          </Tooltip>
+        )}
       </div>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

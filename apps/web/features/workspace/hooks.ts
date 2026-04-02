@@ -1,6 +1,27 @@
 "use client";
 
+import { useMemo } from "react";
+import type { MemberRole, MemberWithUser } from "@/shared/types";
+import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "./store";
+
+/** Current user's membership in the active workspace, if any. */
+export function useCurrentWorkspaceMember(): MemberWithUser | null {
+  const userId = useAuthStore((s) => s.user?.id);
+  const members = useWorkspaceStore((s) => s.members);
+  return useMemo(
+    () => members.find((m) => m.user_id === userId) ?? null,
+    [members, userId],
+  );
+}
+
+export function canCreateOrRenameProjects(role: MemberRole | undefined): boolean {
+  return role === "owner" || role === "admin";
+}
+
+export function canDeleteProjects(role: MemberRole | undefined): boolean {
+  return role === "owner";
+}
 
 export function useActorName() {
   const members = useWorkspaceStore((s) => s.members);

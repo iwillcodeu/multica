@@ -36,6 +36,9 @@ docker compose up -d
 # Build and run the backend
 cd server && go run ./cmd/migrate up && cd ..
 make start
+
+# Alternative: local PostgreSQL (Homebrew, etc.) — no Docker; set DATABASE_URL in .env, then:
+# make setup-local && make start-local
 ```
 
 ## CLI

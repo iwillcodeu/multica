@@ -13,11 +13,11 @@ import {
   Plus,
   Check,
   BookOpenText,
-  SquarePen,
+  PanelLeft,
+  PanelLeftClose,
   CircleUser,
 } from "lucide-react";
 import { WorkspaceAvatar } from "@/features/workspace";
-import { useIssueDraftStore } from "@/features/issues/stores/draft-store";
 import {
   Sidebar,
   SidebarContent,
@@ -29,6 +29,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import {
   DropdownMenu,
@@ -59,12 +60,6 @@ const workspaceNav = [
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-function DraftDot() {
-  const hasDraft = useIssueDraftStore((s) => !!(s.draft.title || s.draft.description));
-  if (!hasDraft) return null;
-  return <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand" />;
-}
-
 export function AppSidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -74,6 +69,7 @@ export function AppSidebar() {
   const workspace = useWorkspaceStore((s) => s.workspace);
   const workspaces = useWorkspaceStore((s) => s.workspaces);
   const switchWorkspace = useWorkspaceStore((s) => s.switchWorkspace);
+  const { open, toggleSidebar } = useSidebar();
 
   const unreadCount = useInboxStore((s) => s.unreadCount());
 
@@ -159,22 +155,19 @@ export function AppSidebar() {
             </SidebarMenu>
             <Tooltip>
               <TooltipTrigger
-                className="relative flex h-7 w-7 items-center justify-center rounded-lg bg-background text-foreground shadow-sm hover:bg-accent"
-                onClick={() => {
-                  let projectId: string | undefined;
-                  const m = pathname.match(/^\/projects\/([^/]+)/);
-                  if (m) projectId = m[1];
-                  if (!projectId) projectId = projects[0]?.id;
-                  useModalStore.getState().open(
-                    "create-issue",
-                    projectId ? { project_id: projectId } : {},
-                  );
-                }}
+                className="flex h-7 w-7 items-center justify-center rounded-lg bg-background text-foreground shadow-sm hover:bg-accent"
+                onClick={() => toggleSidebar()}
+                aria-label={open ? "Hide sidebar" : "Show sidebar"}
               >
-                <SquarePen className="size-3.5" />
-                <DraftDot />
+                {open ? (
+                  <PanelLeftClose className="size-3.5" />
+                ) : (
+                  <PanelLeft className="size-3.5" />
+                )}
               </TooltipTrigger>
-              <TooltipContent side="bottom">New issue</TooltipContent>
+              <TooltipContent side="bottom">
+                {open ? "Hide sidebar" : "Show sidebar"}
+              </TooltipContent>
             </Tooltip>
           </div>
         </SidebarHeader>

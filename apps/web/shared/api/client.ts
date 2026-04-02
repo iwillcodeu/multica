@@ -46,6 +46,19 @@ export interface LoginResponse {
   user: User;
 }
 
+/** Backend origin only: strip trailing slashes and a mistaken `/api` suffix.
+ * Auth lives at `/auth/*` and app API at `/api/*` on the same host; a base like
+ * `http://localhost:8080/api` would otherwise produce `/api/auth/...` (404). */
+export function normalizeApiBaseUrl(raw: string): string {
+  let s = raw.trim();
+  if (!s) return "";
+  s = s.replace(/\/+$/, "");
+  if (s.endsWith("/api")) {
+    s = s.slice(0, -4);
+  }
+  return s.replace(/\/+$/, "");
+}
+
 export class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -53,7 +66,7 @@ export class ApiClient {
   private logger: Logger;
 
   constructor(baseUrl: string, options?: { logger?: Logger }) {
-    this.baseUrl = baseUrl;
+    this.baseUrl = normalizeApiBaseUrl(baseUrl);
     this.logger = options?.logger ?? noopLogger;
   }
 
@@ -146,6 +159,14 @@ export class ApiClient {
     });
   }
 
+  async loginPassword(email: string, password: string): Promise<LoginResponse> {
+    // Prefer /api/* so same-origin requests hit Next Route Handler → Go (avoids /auth rewrite gaps).
+    return this.fetch("/api/auth/login-password", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
   async getMe(): Promise<User> {
     return this.fetch("/api/me");
   }
@@ -154,6 +175,16 @@ export class ApiClient {
     return this.fetch("/api/me", {
       method: "PATCH",
       body: JSON.stringify(data),
+    });
+  }
+
+  async changeMyPassword(body: {
+    current_password?: string;
+    new_password: string;
+  }): Promise<User> {
+    return this.fetch("/api/me/change-password", {
+      method: "POST",
+      body: JSON.stringify(body),
     });
   }
 

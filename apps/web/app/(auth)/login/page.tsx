@@ -13,7 +13,14 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
+import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -50,6 +57,7 @@ function LoginPageContent() {
   const isLoading = useAuthStore((s) => s.isLoading);
   const sendCode = useAuthStore((s) => s.sendCode);
   const verifyCode = useAuthStore((s) => s.verifyCode);
+  const loginPassword = useAuthStore((s) => s.loginPassword);
   const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const searchParams = useSearchParams();
 
@@ -61,7 +69,10 @@ function LoginPageContent() {
   }, [isLoading, user, router, searchParams]);
 
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
+  const [authMode, setAuthMode] = useState<"password" | "code">("password");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -106,6 +117,40 @@ function LoginPageContent() {
     const cliState = searchParams.get("cli_state") || "";
     setSubmitting(true);
     redirectToCliCallback(cliCallback, token, cliState);
+  };
+
+  const handlePasswordLogin = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!email.trim() || !password) {
+      setError("Email and password are required");
+      return;
+    }
+    setError("");
+    setSubmitting(true);
+    try {
+      const cliCallback = searchParams.get("cli_callback");
+      if (cliCallback) {
+        if (!validateCliCallback(cliCallback)) {
+          setError("Invalid callback URL");
+          setSubmitting(false);
+          return;
+        }
+        const { token } = await api.loginPassword(email.trim(), password);
+        const cliState = searchParams.get("cli_state") || "";
+        redirectToCliCallback(cliCallback, token, cliState);
+        return;
+      }
+
+      await loginPassword(email.trim(), password);
+      const wsList = await api.listWorkspaces();
+      await hydrateWorkspace(wsList);
+      router.push(searchParams.get("next") || "/projects");
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Sign-in failed",
+      );
+      setSubmitting(false);
+    }
   };
 
   const handleSendCode = async (e?: React.FormEvent) => {
@@ -288,34 +333,128 @@ function LoginPageContent() {
           <CardTitle className="text-2xl">Multica</CardTitle>
           <CardDescription>AI-native task management</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-          </form>
+        <CardContent className="space-y-4">
+          <div className="flex rounded-lg border border-border p-0.5 text-sm">
+            <button
+              type="button"
+              className={`flex-1 rounded-md py-2 font-medium transition-colors ${
+                authMode === "password"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => {
+                setAuthMode("password");
+                setError("");
+                setPasswordVisible(false);
+              }}
+            >
+              Password
+            </button>
+            <button
+              type="button"
+              className={`flex-1 rounded-md py-2 font-medium transition-colors ${
+                authMode === "code"
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+              onClick={() => {
+                setAuthMode("code");
+                setError("");
+              }}
+            >
+              Email code
+            </button>
+          </div>
+
+          {authMode === "password" ? (
+            <form id="login-password-form" onSubmit={handlePasswordLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <InputGroup>
+                  <InputGroupInput
+                    id="password"
+                    type={passwordVisible ? "text" : "password"}
+                    placeholder="Your account password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    autoComplete="current-password"
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={passwordVisible ? "Hide password" : "Show password"}
+                      onClick={() => setPasswordVisible((v) => !v)}
+                    >
+                      {passwordVisible ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          ) : (
+            <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="email-code">Email</Label>
+                <Input
+                  id="email-code"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                New users get a verification code and a personal workspace. Existing accounts without a
+                password also use this path.
+              </p>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          )}
         </CardContent>
         <CardFooter>
-          <Button
-            type="submit"
-            form="login-form"
-            disabled={submitting}
-            className="w-full"
-            size="lg"
-          >
-            {submitting ? "Sending code..." : "Continue"}
-          </Button>
+          {authMode === "password" ? (
+            <Button
+              type="submit"
+              form="login-password-form"
+              disabled={submitting}
+              className="w-full"
+              size="lg"
+            >
+              {submitting ? "Signing in..." : "Sign in"}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              form="login-form"
+              disabled={submitting}
+              className="w-full"
+              size="lg"
+            >
+              {submitting ? "Sending code..." : "Continue with email"}
+            </Button>
+          )}
         </CardFooter>
       </Card>
     </div>

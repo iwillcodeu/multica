@@ -612,10 +612,35 @@ func agentHasTriggerEnabled(raw []byte, triggerType string) bool {
 	return true // Trigger type not configured = enabled by default
 }
 
+func issueDeletableByMember(issue db.Issue, member db.Member, userID string) bool {
+	if member.Role == "owner" || member.Role == "admin" {
+		return true
+	}
+	if issue.CreatorType == "member" && uuidToString(issue.CreatorID) == userID {
+		return true
+	}
+	return false
+}
+
 func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	issue, ok := h.loadIssueForUser(w, r, id)
 	if !ok {
+		return
+	}
+
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	wsID := uuidToString(issue.WorkspaceID)
+	member, err := h.getWorkspaceMember(r.Context(), userID, wsID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+	if !issueDeletableByMember(issue, member, userID) {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
 	}
 
@@ -624,14 +649,12 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// Collect all attachment URLs (issue-level + comment-level) before CASCADE delete.
 	attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
 
-	err := h.Queries.DeleteIssue(r.Context(), parseUUID(id))
-	if err != nil {
+	if err := h.Queries.DeleteIssue(r.Context(), parseUUID(id)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete issue")
 		return
 	}
 
 	h.deleteS3Objects(r.Context(), attachmentURLs)
-	userID := requestUserID(r)
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": id})
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", uuidToString(issue.WorkspaceID))...)
@@ -818,6 +841,12 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	workspaceID := resolveWorkspaceID(r)
+	member, err := h.getWorkspaceMember(r.Context(), userID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
+
 	deleted := 0
 	for _, issueID := range req.IssueIDs {
 		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
@@ -826,6 +855,11 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			continue
+		}
+
+		if !issueDeletableByMember(issue, member, userID) {
+			writeError(w, http.StatusForbidden, "insufficient permissions to delete one or more issues")
+			return
 		}
 
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)

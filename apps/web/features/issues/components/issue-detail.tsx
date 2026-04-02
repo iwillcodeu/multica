@@ -231,6 +231,12 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
 
   const loading = issueLoading;
 
+  const canDeleteIssue =
+    !!issue &&
+    (currentMemberRole === "owner" ||
+      currentMemberRole === "admin" ||
+      (issue.creator_type === "member" && issue.creator_id === user?.id));
+
   // Issue field updates — write directly to the global store (single source of truth)
   const handleUpdateField = useCallback(
     (updates: Partial<UpdateIssueRequest>) => {
@@ -257,6 +263,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
       await api.deleteIssue(issue!.id);
       useIssueStore.getState().removeIssue(issue!.id);
       toast.success("Issue deleted");
+      setDeleteDialogOpen(false);
       if (onDelete) onDelete();
       else router.push(`/projects/${issue!.project_id}`);
     } catch {
@@ -492,16 +499,18 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                   Copy link
                 </DropdownMenuItem>
 
-                <DropdownMenuSeparator />
-
-                {/* Delete */}
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={() => setDeleteDialogOpen(true)}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete issue
-                </DropdownMenuItem>
+                {canDeleteIssue && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => setDeleteDialogOpen(true)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete issue
+                    </DropdownMenuItem>
+                  </>
+                )}
               </DropdownMenuContent>
             </DropdownMenu>
             <Tooltip>
@@ -536,11 +545,14 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
                   <AlertDialogAction
-                    onClick={handleDelete}
-                    disabled={deleting}
                     className="bg-destructive text-white hover:bg-destructive/90"
+                    disabled={deleting}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void handleDelete();
+                    }}
                   >
                     {deleting ? "Deleting..." : "Delete"}
                   </AlertDialogAction>

@@ -1,13 +1,27 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Shield, User, Plus, MoreHorizontal, UserMinus, Users } from "lucide-react";
+import { Crown, Shield, User, Plus, MoreHorizontal, UserMinus, Users, Pencil, Eye, EyeOff } from "lucide-react";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import type { MemberWithUser, MemberRole } from "@/shared/types";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -39,10 +53,11 @@ import { toast } from "sonner";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
 import { api } from "@/shared/api";
+import { validateDisplayNameInput } from "@/shared/display-name";
 
 const roleConfig: Record<MemberRole, { label: string; icon: typeof Crown; description: string }> = {
-  owner: { label: "Owner", icon: Crown, description: "Full access, manage all settings" },
-  admin: { label: "Admin", icon: Shield, description: "Manage members and settings" },
+  owner: { label: "Owner", icon: Crown, description: "Full access; create, rename, and delete projects" },
+  admin: { label: "Admin", icon: Shield, description: "Manage members and settings; create and rename projects" },
   member: { label: "Member", icon: User, description: "Create and work on issues" },
 };
 
@@ -54,6 +69,7 @@ function MemberRow({
   busy,
   onRoleChange,
   onRemove,
+  onEditProfile,
 }: {
   member: MemberWithUser;
   canManage: boolean;
@@ -62,12 +78,14 @@ function MemberRow({
   busy: boolean;
   onRoleChange: (role: MemberRole) => void;
   onRemove: () => void;
+  onEditProfile: () => void;
 }) {
   const rc = roleConfig[member.role];
   const RoleIcon = rc.icon;
   const canEditRole = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
-  const showMenu = canEditRole || canRemove;
+  const canEditProfile = canManage;
+  const showMenu = canEditRole || canRemove || canEditProfile;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3">
@@ -86,6 +104,13 @@ function MemberRow({
             }
           />
           <DropdownMenuContent align="end" className="w-auto">
+            {canEditProfile && (
+              <DropdownMenuItem onClick={onEditProfile}>
+                <Pencil className="h-3.5 w-3.5" />
+                Edit name or password
+              </DropdownMenuItem>
+            )}
+            {canEditProfile && (canEditRole || canRemove) && <DropdownMenuSeparator />}
             {canEditRole && (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
@@ -139,13 +164,21 @@ function MemberRow({
 
 export function MembersTab() {
   const user = useAuthStore((s) => s.user);
+  const setUser = useAuthStore((s) => s.setUser);
   const workspace = useWorkspaceStore((s) => s.workspace);
   const members = useWorkspaceStore((s) => s.members);
   const refreshMembers = useWorkspaceStore((s) => s.refreshMembers);
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<MemberRole>("member");
+  const [invitePassword, setInvitePassword] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [editMember, setEditMember] = useState<MemberWithUser | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPassword, setEditPassword] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [invitePasswordVisible, setInvitePasswordVisible] = useState(false);
+  const [editPasswordVisible, setEditPasswordVisible] = useState(false);
   const [memberActionId, setMemberActionId] = useState<string | null>(null);
   const [confirmAction, setConfirmAction] = useState<{
     title: string;
@@ -165,9 +198,11 @@ export function MembersTab() {
       await api.createMember(workspace.id, {
         email: inviteEmail,
         role: inviteRole,
+        ...(invitePassword.trim() ? { password: invitePassword.trim() } : {}),
       });
       setInviteEmail("");
       setInviteRole("member");
+      setInvitePassword("");
       await refreshMembers();
       toast.success("Member added");
     } catch (e) {
@@ -212,6 +247,47 @@ export function MembersTab() {
     });
   };
 
+  const openEditMember = (m: MemberWithUser) => {
+    setEditMember(m);
+    setEditName(m.name);
+    setEditPassword("");
+    setEditPasswordVisible(false);
+  };
+
+  const handleSaveEditMember = async () => {
+    if (!workspace || !editMember) return;
+    const nameErr = validateDisplayNameInput(editName);
+    if (nameErr) {
+      toast.error(nameErr);
+      return;
+    }
+    const trimmedPw = editPassword.trim();
+    const nameChanged = editName.trim() !== editMember.name;
+    if (!nameChanged && !trimmedPw) {
+      toast.info("No changes to save");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await api.updateMember(workspace.id, editMember.id, {
+        role: editMember.role,
+        ...(nameChanged ? { name: editName.trim() } : {}),
+        ...(trimmedPw ? { password: trimmedPw } : {}),
+      });
+      await refreshMembers();
+      if (editMember.user_id === user?.id) {
+        const me = await api.getMe();
+        setUser(me);
+      }
+      toast.success("Member updated");
+      setEditMember(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to update member");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   if (!workspace) return null;
 
   return (
@@ -251,6 +327,33 @@ export function MembersTab() {
                   {inviteLoading ? "Adding..." : "Add"}
                 </Button>
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Initial password (optional)</Label>
+                <InputGroup className="max-w-md">
+                  <InputGroupInput
+                    type={invitePasswordVisible ? "text" : "password"}
+                    autoComplete="new-password"
+                    value={invitePassword}
+                    onChange={(e) => setInvitePassword(e.target.value)}
+                    placeholder="Min. 8 characters — lets them sign in with email + password"
+                  />
+                  <InputGroupAddon align="inline-end">
+                    <InputGroupButton
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={invitePasswordVisible ? "Hide password" : "Show password"}
+                      onClick={() => setInvitePasswordVisible((v) => !v)}
+                    >
+                      {invitePasswordVisible ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -267,6 +370,7 @@ export function MembersTab() {
                   busy={memberActionId === m.id}
                   onRoleChange={(role) => handleRoleChange(m.id, role)}
                   onRemove={() => handleRemoveMember(m)}
+                  onEditProfile={() => openEditMember(m)}
                 />
               </div>
             ))}
@@ -275,6 +379,65 @@ export function MembersTab() {
           <p className="text-sm text-muted-foreground">No members found.</p>
         )}
       </section>
+
+      <Dialog
+        open={!!editMember}
+        onOpenChange={(open) => {
+          if (!open) setEditMember(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit member</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-xs text-muted-foreground">{editMember?.email}</p>
+            <div className="space-y-1">
+              <Label>Display name</Label>
+              <Input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Unique name, max 20 units (Han = 2)"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>New password</Label>
+              <InputGroup>
+                <InputGroupInput
+                  type={editPasswordVisible ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Leave blank to keep current"
+                />
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton
+                    type="button"
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={editPasswordVisible ? "Hide password" : "Show password"}
+                    onClick={() => setEditPasswordVisible((v) => !v)}
+                  >
+                    {editPasswordVisible ? (
+                      <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setEditMember(null)}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={() => void handleSaveEditMember()} disabled={editSaving}>
+              {editSaving ? "Saving…" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!confirmAction} onOpenChange={(v) => { if (!v) setConfirmAction(null); }}>
         <AlertDialogContent>

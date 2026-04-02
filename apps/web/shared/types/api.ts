@@ -64,10 +64,13 @@ export interface UpdateMeRequest {
 export interface CreateMemberRequest {
   email: string;
   role?: MemberRole;
+  password?: string;
 }
 
 export interface UpdateMemberRequest {
-  role: MemberRole;
+  role?: MemberRole;
+  name?: string;
+  password?: string;
 }
 
 // Personal Access Tokens

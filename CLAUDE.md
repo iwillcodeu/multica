@@ -115,6 +115,16 @@ make start            # Start backend + frontend together
 make stop             # Stop app processes for the current checkout
 make db-down          # Stop the shared PostgreSQL container
 
+# Local Postgres (no Docker) — you run PostgreSQL yourself; DATABASE_URL in .env must match
+make setup-local      # First-time: pnpm install, migrate (skips Docker)
+make start-local      # Backend + frontend (skips Docker)
+make dev-local        # Go server only
+make migrate-up-local
+make migrate-down-local
+make test-local       # Go tests without Docker preflight
+make setup-worktree-local
+make start-worktree-local  # uses .env.worktree
+
 # Frontend
 pnpm install
 pnpm dev:web          # Next.js dev server (port 3000)

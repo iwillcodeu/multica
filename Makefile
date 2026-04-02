@@ -1,4 +1,4 @@
-.PHONY: dev daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down
+.PHONY: dev dev-local daemon cli multica build test test-local migrate-up migrate-down migrate-up-local migrate-down-local sqlc seed clean setup setup-local setup-worktree-local start start-local start-worktree-local stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -50,6 +50,18 @@ setup:
 	@echo ""
 	@echo "✓ Setup complete! Run 'make start' to launch the app."
 
+# First-time setup using a Postgres instance you run yourself (Homebrew, etc.) — no Docker
+setup-local:
+	$(REQUIRE_ENV)
+	@echo "==> Using env file: $(ENV_FILE) (local Postgres, no Docker)"
+	@echo "==> Installing dependencies..."
+	pnpm install
+	@bash scripts/require-local-postgres.sh "$(ENV_FILE)"
+	@echo "==> Running migrations..."
+	cd server && go run ./cmd/migrate up
+	@echo ""
+	@echo "✓ Setup complete! Run 'make start-local' to launch the app."
+
 # Start all services (backend + frontend)
 start:
 	$(REQUIRE_ENV)
@@ -63,13 +75,26 @@ start:
 		pnpm dev:web & \
 		wait
 
+# Start backend + frontend against local Postgres (no Docker ensure-postgres)
+start-local:
+	$(REQUIRE_ENV)
+	@echo "Using env file: $(ENV_FILE) (local Postgres + local processes, no Docker)"
+	@echo "Backend: http://localhost:$(PORT)"
+	@echo "Frontend: http://localhost:$(FRONTEND_PORT)"
+	@bash scripts/require-local-postgres.sh "$(ENV_FILE)"
+	@echo "Starting backend and frontend..."
+	@trap 'kill 0' EXIT; \
+		(cd server && go run ./cmd/server) & \
+		pnpm dev:web & \
+		wait
+
 # Stop all services
 stop:
 	$(REQUIRE_ENV)
 	@echo "Stopping services..."
 	@-lsof -ti:$(PORT) | xargs kill -9 2>/dev/null
 	@-lsof -ti:$(FRONTEND_PORT) | xargs kill -9 2>/dev/null
-	@echo "✓ App processes stopped. Shared PostgreSQL is still running on localhost:5432."
+	@echo "✓ App processes stopped (ports $(PORT), $(FRONTEND_PORT))."
 
 # Full verification: typecheck + unit tests + Go tests + E2E
 check:
@@ -111,12 +136,24 @@ stop-worktree:
 check-worktree:
 	@ENV_FILE=$(WORKTREE_ENV_FILE) bash scripts/check.sh
 
+setup-worktree-local:
+	@$(MAKE) setup-local ENV_FILE=$(WORKTREE_ENV_FILE)
+
+start-worktree-local:
+	@$(MAKE) start-local ENV_FILE=$(WORKTREE_ENV_FILE)
+
 # ---------- Individual commands ----------
 
 # Go server
 dev:
 	$(REQUIRE_ENV)
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
+	cd server && go run ./cmd/server
+
+# Go server only, local Postgres (no Docker)
+dev-local:
+	$(REQUIRE_ENV)
+	@bash scripts/require-local-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/server
 
 daemon:
@@ -140,6 +177,10 @@ test:
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go test ./...
 
+test-local:
+	$(REQUIRE_ENV)
+	cd server && go test ./...
+
 # Database
 migrate-up:
 	$(REQUIRE_ENV)
@@ -149,6 +190,16 @@ migrate-up:
 migrate-down:
 	$(REQUIRE_ENV)
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
+	cd server && go run ./cmd/migrate down
+
+migrate-up-local:
+	$(REQUIRE_ENV)
+	@bash scripts/require-local-postgres.sh "$(ENV_FILE)"
+	cd server && go run ./cmd/migrate up
+
+migrate-down-local:
+	$(REQUIRE_ENV)
+	@bash scripts/require-local-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/migrate down
 
 sqlc:

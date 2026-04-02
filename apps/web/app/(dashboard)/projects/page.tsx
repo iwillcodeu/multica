@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { MulticaIcon } from "@/components/multica-icon";
 import { Button } from "@/components/ui/button";
+import { canCreateOrRenameProjects, useCurrentWorkspaceMember } from "@/features/workspace";
 import { useProjectStore } from "@/features/projects";
 
 export default function ProjectsIndexPage() {
@@ -11,6 +12,8 @@ export default function ProjectsIndexPage() {
   const projects = useProjectStore((s) => s.projects);
   const loading = useProjectStore((s) => s.loading);
   const createProject = useProjectStore((s) => s.createProject);
+  const member = useCurrentWorkspaceMember();
+  const canCreate = canCreateOrRenameProjects(member?.role);
 
   useEffect(() => {
     if (loading) return;
@@ -38,17 +41,21 @@ export default function ProjectsIndexPage() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 p-6 text-center">
       <p className="text-sm text-muted-foreground max-w-sm">
-        No projects yet. Create one to start tracking issues on a board.
+        {canCreate
+          ? "No projects yet. Create one to start tracking issues on a board."
+          : "No projects in this workspace. Ask a workspace owner or admin to create a project."}
       </p>
-      <Button
-        type="button"
-        onClick={async () => {
-          const p = await createProject("General");
-          router.replace(`/projects/${p.id}`);
-        }}
-      >
-        Create &quot;General&quot; project
-      </Button>
+      {canCreate && (
+        <Button
+          type="button"
+          onClick={async () => {
+            const p = await createProject("General");
+            router.replace(`/projects/${p.id}`);
+          }}
+        >
+          Create &quot;General&quot; project
+        </Button>
+      )}
     </div>
   );
 }

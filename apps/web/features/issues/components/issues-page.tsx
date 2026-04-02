@@ -15,7 +15,7 @@ import { filterIssues } from "@/features/issues/utils/filter";
 import { BOARD_STATUSES } from "@/features/issues/config";
 import { useWorkspaceStore } from "@/features/workspace";
 import { WorkspaceAvatar } from "@/features/workspace";
-import { useProjectStore } from "@/features/projects";
+import { ProjectBarActions, useProjectStore } from "@/features/projects";
 import { api } from "@/shared/api";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { IssuesHeader } from "./issues-header";
@@ -144,23 +144,26 @@ export function IssuesPage({ projectId }: { projectId?: string | null }) {
     <div className="flex flex-1 min-h-0 flex-col">
       {/* Header 1: Workspace breadcrumb */}
       <div className="flex h-12 shrink-0 items-center gap-1.5 border-b px-4">
-        <WorkspaceAvatar name={workspace?.name ?? "W"} size="sm" />
-        <span className="text-sm text-muted-foreground">
-          {workspace?.name ?? "Workspace"}
-        </span>
-        <ChevronRight className="h-3 w-3 text-muted-foreground" />
-        <Link
-          href="/projects"
-          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Projects
-        </Link>
-        {projectId && (
-          <>
-            <ChevronRight className="h-3 w-3 text-muted-foreground/50" />
-            <span className="text-sm font-medium truncate">{projectLabel}</span>
-          </>
-        )}
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <WorkspaceAvatar name={workspace?.name ?? "W"} size="sm" />
+          <span className="text-sm text-muted-foreground">
+            {workspace?.name ?? "Workspace"}
+          </span>
+          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+          <Link
+            href="/projects"
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Projects
+          </Link>
+          {projectId && (
+            <>
+              <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground/50" />
+              <span className="min-w-0 truncate text-sm font-medium">{projectLabel}</span>
+            </>
+          )}
+        </div>
+        {projectId ? <ProjectBarActions projectId={projectId} /> : null}
       </div>
 
       {/* Header 2: Scope tabs + filters */}

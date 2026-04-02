@@ -13,20 +13,26 @@ const nextConfig: NextConfig = {
     qualities: [75, 80, 85],
   },
   async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${remoteApiUrl}/api/:path*`,
-      },
-      {
-        source: "/ws",
-        destination: `${remoteApiUrl}/ws`,
-      },
-      {
-        source: "/auth/:path*",
-        destination: `${remoteApiUrl}/auth/:path*`,
-      },
-    ];
+    // Array form = afterFiles: runs before App Router dynamic routes, so a catch-all
+    // `/api/*` would proxy to Go and never hit `app/api/**/route.ts`. Use `fallback`
+    // so Route Handlers (e.g. login-password, change-password) run first; unmatched
+    // `/api/*` then proxies to the Go server.
+    return {
+      fallback: [
+        {
+          source: "/api/:path*",
+          destination: `${remoteApiUrl}/api/:path*`,
+        },
+        {
+          source: "/ws",
+          destination: `${remoteApiUrl}/ws`,
+        },
+        {
+          source: "/auth/:path*",
+          destination: `${remoteApiUrl}/auth/:path*`,
+        },
+      ],
+    };
   },
 };
 

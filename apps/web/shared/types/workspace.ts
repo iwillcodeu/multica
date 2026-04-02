@@ -33,6 +33,8 @@ export interface User {
   avatar_url: string | null;
   created_at: string;
   updated_at: string;
+  /** True when the account has a password set (email+password sign-in available). */
+  has_password?: boolean;
 }
 
 export interface MemberWithUser {

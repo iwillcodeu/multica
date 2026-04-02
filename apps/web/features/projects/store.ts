@@ -16,6 +16,8 @@ interface ProjectState {
   updateProjectLocal: (id: string, updates: Partial<Project>) => void;
   removeProject: (id: string) => void;
   createProject: (name: string) => Promise<Project>;
+  updateProject: (id: string, updates: { name?: string; position?: number }) => Promise<Project>;
+  deleteProject: (id: string) => Promise<void>;
   reset: () => void;
 }
 
@@ -58,6 +60,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const p = await api.createProject({ name });
     get().addProject(p);
     return p;
+  },
+
+  updateProject: async (id, updates) => {
+    const p = await api.updateProject(id, updates);
+    get().updateProjectLocal(id, p);
+    return p;
+  },
+
+  deleteProject: async (id) => {
+    await api.deleteProject(id);
+    get().removeProject(id);
   },
 
   reset: () => set({ projects: [], loading: true }),

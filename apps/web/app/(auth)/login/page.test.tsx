@@ -12,11 +12,15 @@ vi.mock("next/navigation", () => ({
 // Mock auth store
 const mockSendCode = vi.fn();
 const mockVerifyCode = vi.fn();
+const mockLoginPassword = vi.fn();
 vi.mock("@/features/auth", () => ({
   useAuthStore: (selector: (s: any) => any) =>
     selector({
+      user: null,
+      isLoading: false,
       sendCode: mockSendCode,
       verifyCode: mockVerifyCode,
+      loginPassword: mockLoginPassword,
     }),
 }));
 
@@ -34,6 +38,7 @@ vi.mock("@/shared/api", () => ({
   api: {
     listWorkspaces: vi.fn().mockResolvedValue([]),
     verifyCode: vi.fn(),
+    loginPassword: vi.fn(),
     setToken: vi.fn(),
     getMe: vi.fn(),
   },
@@ -46,32 +51,33 @@ describe("LoginPage", () => {
     vi.clearAllMocks();
   });
 
-  it("renders login form with email input and continue button", () => {
+  it("renders password sign-in by default", () => {
     render(<LoginPage />);
 
     expect(screen.getByText("Multica")).toBeInTheDocument();
     expect(screen.getByText("AI-native task management")).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Continue" })
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
   });
 
-  it("does not call sendCode when email is empty", async () => {
+  it("does not call sendCode when email is empty on email-code tab", async () => {
     const user = userEvent.setup();
     render(<LoginPage />);
 
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Email code" }));
+    await user.click(screen.getByRole("button", { name: "Continue with email" }));
     expect(mockSendCode).not.toHaveBeenCalled();
   });
 
-  it("calls sendCode with email on submit", async () => {
+  it("calls sendCode with email on submit in email-code mode", async () => {
     mockSendCode.mockResolvedValueOnce(undefined);
     const user = userEvent.setup();
     render(<LoginPage />);
 
+    await user.click(screen.getByRole("button", { name: "Email code" }));
     await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with email" }));
 
     await waitFor(() => {
       expect(mockSendCode).toHaveBeenCalledWith("test@multica.ai");
@@ -83,8 +89,9 @@ describe("LoginPage", () => {
     const user = userEvent.setup();
     render(<LoginPage />);
 
+    await user.click(screen.getByRole("button", { name: "Email code" }));
     await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with email" }));
 
     await waitFor(() => {
       expect(screen.getByText("Sending code...")).toBeInTheDocument();
@@ -96,8 +103,9 @@ describe("LoginPage", () => {
     const user = userEvent.setup();
     render(<LoginPage />);
 
+    await user.click(screen.getByRole("button", { name: "Email code" }));
     await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with email" }));
 
     await waitFor(() => {
       expect(screen.getByText("Check your email")).toBeInTheDocument();
@@ -109,8 +117,9 @@ describe("LoginPage", () => {
     const user = userEvent.setup();
     render(<LoginPage />);
 
+    await user.click(screen.getByRole("button", { name: "Email code" }));
     await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(screen.getByRole("button", { name: "Continue with email" }));
 
     await waitFor(() => {
       expect(screen.getByText("Network error")).toBeInTheDocument();

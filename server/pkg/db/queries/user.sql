@@ -18,3 +18,22 @@ UPDATE "user" SET
     updated_at = now()
 WHERE id = $1
 RETURNING *;
+
+-- name: UpdateUserName :one
+UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: SetUserPasswordHash :exec
+UPDATE "user" SET password_hash = $2, updated_at = now() WHERE id = $1;
+
+-- name: IsDisplayNameTaken :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim(sqlc.arg(check_name)::text))
+) AS taken;
+
+-- name: IsDisplayNameTakenByOther :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim(sqlc.arg(check_name)::text))
+    AND id <> sqlc.arg(exclude_id)
+) AS taken;
