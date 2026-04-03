@@ -9,6 +9,8 @@ export type IssueStatus =
 
 export type IssuePriority = "urgent" | "high" | "medium" | "low" | "none";
 
+export type IssueCategory = "bug" | "feature" | "task";
+
 export type IssueAssigneeType = "member" | "agent";
 
 export interface IssueReaction {
@@ -29,6 +31,7 @@ export interface Issue {
   description: string | null;
   status: IssueStatus;
   priority: IssuePriority;
+  category: IssueCategory;
   assignee_type: IssueAssigneeType | null;
   assignee_id: string | null;
   creator_type: IssueAssigneeType;

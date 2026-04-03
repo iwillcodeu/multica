@@ -92,11 +92,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       api.listSkills().catch(() => [] as Skill[]),
     ]);
     await Promise.all([
-      useIssueStore.getState().fetch(),
-      useInboxStore.getState().fetch(),
-      useProjectStore.getState().fetch(),
       useIssueStore.getState().fetch().catch(() => {}),
       useInboxStore.getState().fetch().catch(() => {}),
+      useProjectStore.getState().fetch(),
     ]);
     logger.info("hydrate complete", "members:", nextMembers.length, "agents:", nextAgents.length);
     set({ members: nextMembers, agents: nextAgents, skills: nextSkills });

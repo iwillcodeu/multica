@@ -1,12 +1,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { IssueStatus, IssuePriority, IssueAssigneeType } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueCategory, IssueAssigneeType } from "@/shared/types";
 
 interface IssueDraft {
   title: string;
   description: string;
   status: IssueStatus;
   priority: IssuePriority;
+  category: IssueCategory;
   assigneeType?: IssueAssigneeType;
   assigneeId?: string;
   dueDate: string | null;
@@ -17,6 +18,7 @@ const EMPTY_DRAFT: IssueDraft = {
   description: "",
   status: "todo",
   priority: "none",
+  category: "task",
   assigneeType: undefined,
   assigneeId: undefined,
   dueDate: null,

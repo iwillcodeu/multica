@@ -140,6 +140,7 @@ func init() {
 	issueCreateCmd.Flags().String("assignee", "", "Assignee name (member or agent)")
 	issueCreateCmd.Flags().String("parent", "", "Parent issue ID")
 	issueCreateCmd.Flags().String("due-date", "", "Due date (RFC3339 format)")
+	issueCreateCmd.Flags().String("category", "", "Category: bug, feature, or task (default task)")
 	issueCreateCmd.Flags().String("output", "json", "Output format: table or json")
 	issueCreateCmd.Flags().StringSlice("attachment", nil, "File path(s) to attach (can be specified multiple times)")
 
@@ -150,6 +151,7 @@ func init() {
 	issueUpdateCmd.Flags().String("priority", "", "New priority")
 	issueUpdateCmd.Flags().String("assignee", "", "New assignee name (member or agent)")
 	issueUpdateCmd.Flags().String("due-date", "", "New due date (RFC3339 format)")
+	issueUpdateCmd.Flags().String("category", "", "Category: bug, feature, or task")
 	issueUpdateCmd.Flags().String("output", "json", "Output format: table or json")
 
 	// issue status
@@ -327,6 +329,9 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	if v, _ := cmd.Flags().GetString("due-date"); v != "" {
 		body["due_date"] = v
 	}
+	if v, _ := cmd.Flags().GetString("category"); v != "" {
+		body["category"] = v
+	}
 	if v, _ := cmd.Flags().GetString("assignee"); v != "" {
 		aType, aID, resolveErr := resolveAssignee(ctx, client, v)
 		if resolveErr != nil {
@@ -399,6 +404,10 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	if cmd.Flags().Changed("due-date") {
 		v, _ := cmd.Flags().GetString("due-date")
 		body["due_date"] = v
+	}
+	if cmd.Flags().Changed("category") {
+		v, _ := cmd.Flags().GetString("category")
+		body["category"] = v
 	}
 	if cmd.Flags().Changed("assignee") {
 		v, _ := cmd.Flags().GetString("assignee")

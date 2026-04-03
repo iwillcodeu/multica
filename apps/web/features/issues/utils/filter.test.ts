@@ -20,6 +20,7 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     description: null,
     status: "todo",
     priority: "medium",
+    category: "task",
     assignee_type: null,
     assignee_id: null,
     creator_type: "member",

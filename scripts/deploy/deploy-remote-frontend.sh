@@ -38,6 +38,9 @@ set +a
 export MULTICA_STANDALONE_DEPLOY=1
 export NEXT_TELEMETRY_DISABLED=1
 
+echo "==> pnpm install (sync lockfile → node_modules; avoids missing TipTap etc. after pull)"
+pnpm install --frozen-lockfile
+
 echo "==> pnpm build (standalone)"
 pnpm build
 

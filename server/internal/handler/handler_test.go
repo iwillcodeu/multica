@@ -184,6 +184,9 @@ func TestIssueCRUD(t *testing.T) {
 	if created.Status != "todo" {
 		t.Fatalf("CreateIssue: expected status 'todo', got '%s'", created.Status)
 	}
+	if created.Category != "task" {
+		t.Fatalf("CreateIssue: expected default category 'task', got '%s'", created.Category)
+	}
 	issueID := created.ID
 
 	// Get
@@ -256,6 +259,74 @@ func TestIssueCRUD(t *testing.T) {
 	testHandler.GetIssue(w, req)
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("GetIssue after delete: expected 404, got %d", w.Code)
+	}
+}
+
+func TestIssueCategoryPermissions(t *testing.T) {
+	ctx := context.Background()
+
+	var otherUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email) VALUES ('Category Test Other', 'handler-test-cat-other@multica.ai') RETURNING id::text
+	`).Scan(&otherUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1::uuid`, otherUserID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role) VALUES ($1::uuid, $2::uuid, 'member')
+	`, testWorkspaceID, otherUserID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":    "category permission issue",
+		"status":   "todo",
+		"category": "feature",
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var created IssueResponse
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Category != "feature" {
+		t.Fatalf("expected category feature, got %q", created.Category)
+	}
+
+	// Plain member (not creator) cannot change category.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+created.ID, map[string]any{"category": "bug"})
+	req.Header.Set("X-User-ID", otherUserID)
+	req = withURLParam(req, "id", created.ID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("UpdateIssue as other member: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Creator (owner) can change category.
+	w = httptest.NewRecorder()
+	req = newRequest("PUT", "/api/issues/"+created.ID, map[string]any{"category": "bug"})
+	req = withURLParam(req, "id", created.ID)
+	testHandler.UpdateIssue(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue as owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var updated IssueResponse
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.Category != "bug" {
+		t.Fatalf("expected category bug, got %q", updated.Category)
+	}
+
+	if _, err := testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1::uuid`, created.ID); err != nil {
+		t.Fatal(err)
 	}
 }
 

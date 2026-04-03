@@ -1,4 +1,4 @@
-import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+import type { Issue, IssueStatus, IssuePriority, IssueCategory, IssueAssigneeType } from "./issue";
 import type { Project } from "./project";
 import type { MemberRole } from "./workspace";
 
@@ -13,6 +13,7 @@ export interface CreateIssueRequest {
   parent_issue_id?: string;
   due_date?: string;
   project_id?: string;
+  category?: IssueCategory;
 }
 
 export interface UpdateIssueRequest {
@@ -25,6 +26,7 @@ export interface UpdateIssueRequest {
   position?: number;
   due_date?: string | null;
   project_id?: string;
+  category?: IssueCategory;
 }
 
 export interface ListIssuesParams {

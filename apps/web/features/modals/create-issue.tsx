@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { CalendarDays, Check, ChevronRight, Maximize2, Minimize2, UserMinus, X as XIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { IssueStatus, IssuePriority, IssueAssigneeType } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueCategory, IssueAssigneeType } from "@/shared/types";
 import {
   Dialog,
   DialogContent,
@@ -27,8 +27,8 @@ import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip
 import { Button } from "@/components/ui/button";
 import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
 import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon } from "@/features/issues/components";
-import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
+import { StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
+import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG, ISSUE_CATEGORIES, CATEGORY_CONFIG } from "@/features/issues/config";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useProjectStore } from "@/features/projects";
 import { useIssueStore } from "@/features/issues";
@@ -91,6 +91,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const descEditorRef = useRef<RichTextEditorRef>(null);
   const [status, setStatus] = useState<IssueStatus>((data?.status as IssueStatus) || draft.status);
   const [priority, setPriority] = useState<IssuePriority>(draft.priority);
+  const [category, setCategory] = useState<IssueCategory>(draft.category ?? "task");
   const [submitting, setSubmitting] = useState(false);
   const [assigneeType, setAssigneeType] = useState<IssueAssigneeType | undefined>(draft.assigneeType);
   const [assigneeId, setAssigneeId] = useState<string | undefined>(draft.assigneeId);
@@ -123,6 +124,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
   const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
   const updateStatus = (v: IssueStatus) => { setStatus(v); setDraft({ status: v }); };
   const updatePriority = (v: IssuePriority) => { setPriority(v); setDraft({ priority: v }); };
+  const updateCategory = (v: IssueCategory) => { setCategory(v); setDraft({ category: v }); };
   const updateAssignee = (type?: IssueAssigneeType, id?: string) => {
     setAssigneeType(type); setAssigneeId(id);
     setDraft({ assigneeType: type, assigneeId: id });
@@ -138,6 +140,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
         description: descEditorRef.current?.getMarkdown()?.trim() || undefined,
         status,
         priority,
+        category,
         assignee_type: assigneeType,
         assignee_id: assigneeId,
         due_date: dueDate || undefined,
@@ -270,6 +273,26 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
                 <DropdownMenuItem key={s} onClick={() => updateStatus(s)}>
                   <StatusIcon status={s} className="size-3.5" />
                   <span>{STATUS_CONFIG[s].label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Category */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <PillButton>
+                  <CategoryIcon category={category} />
+                  <span>{CATEGORY_CONFIG[category].label}</span>
+                </PillButton>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-44">
+              {ISSUE_CATEGORIES.map((c) => (
+                <DropdownMenuItem key={c} onClick={() => updateCategory(c)}>
+                  <CategoryIcon category={c} />
+                  <span>{CATEGORY_CONFIG[c].label}</span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

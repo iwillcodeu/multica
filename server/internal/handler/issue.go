@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,7 @@ type IssueResponse struct {
 	Description        *string                 `json:"description"`
 	Status             string                  `json:"status"`
 	Priority           string                  `json:"priority"`
+	Category           string                  `json:"category"`
 	AssigneeType       *string                 `json:"assignee_type"`
 	AssigneeID         *string                 `json:"assignee_id"`
 	CreatorType        string                  `json:"creator_type"`
@@ -69,6 +71,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
 		Priority:      i.Priority,
+		Category:      i.Category,
 		AssigneeType:  textToPtr(i.AssigneeType),
 		AssigneeID:    uuidToPtr(i.AssigneeID),
 		CreatorType:   i.CreatorType,
@@ -199,6 +202,41 @@ type CreateIssueRequest struct {
 	ParentIssueID      *string `json:"parent_issue_id"`
 	DueDate            *string `json:"due_date"`
 	ProjectID          *string `json:"project_id"`
+	Category           string  `json:"category"`
+}
+
+func normalizeIssueCategory(s string) (string, bool) {
+	switch strings.TrimSpace(strings.ToLower(s)) {
+	case "bug":
+		return "bug", true
+	case "feature":
+		return "feature", true
+	case "task":
+		return "task", true
+	default:
+		return "", false
+	}
+}
+
+func (h *Handler) canChangeIssueCategory(ctx context.Context, r *http.Request, issue db.Issue, workspaceID string) bool {
+	userID := requestUserID(r)
+	actorType, actorID := h.resolveActor(r, userID, workspaceID)
+
+	member, err := h.getWorkspaceMember(ctx, userID, workspaceID)
+	if err == nil && roleAllowed(member.Role, "owner", "admin") {
+		return true
+	}
+
+	if issue.CreatorType == actorType && uuidToString(issue.CreatorID) == actorID {
+		return true
+	}
+
+	if issue.AssigneeType.Valid && issue.AssigneeID.Valid &&
+		issue.AssigneeType.String == actorType && uuidToString(issue.AssigneeID) == actorID {
+		return true
+	}
+
+	return false
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -228,6 +266,18 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	priority := req.Priority
 	if priority == "" {
 		priority = "none"
+	}
+
+	category := strings.TrimSpace(req.Category)
+	if category == "" {
+		category = "task"
+	} else {
+		var ok bool
+		category, ok = normalizeIssueCategory(category)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "invalid category, expected bug, feature, or task")
+			return
+		}
 	}
 
 	var assigneeType pgtype.Text
@@ -295,6 +345,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		Description:        ptrToText(req.Description),
 		Status:             status,
 		Priority:           priority,
+		Category:           category,
 		AssigneeType:       assigneeType,
 		AssigneeID:         assigneeID,
 		CreatorType:        creatorType,
@@ -340,6 +391,7 @@ type UpdateIssueRequest struct {
 	Position           *float64 `json:"position"`
 	DueDate            *string  `json:"due_date"`
 	ProjectID          *string  `json:"project_id"`
+	Category           *string  `json:"category"`
 }
 
 func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
@@ -388,6 +440,22 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Priority != nil {
 		params.Priority = pgtype.Text{String: *req.Priority, Valid: true}
+	}
+	if _, ok := rawFields["category"]; ok {
+		if req.Category == nil || strings.TrimSpace(*req.Category) == "" {
+			writeError(w, http.StatusBadRequest, "category must be bug, feature, or task")
+			return
+		}
+		cat, valid := normalizeIssueCategory(*req.Category)
+		if !valid {
+			writeError(w, http.StatusBadRequest, "invalid category, expected bug, feature, or task")
+			return
+		}
+		if !h.canChangeIssueCategory(r.Context(), r, prevIssue, workspaceID) {
+			writeError(w, http.StatusForbidden, "insufficient permissions to change category")
+			return
+		}
+		params.Category = pgtype.Text{String: cat, Valid: true}
 	}
 	if req.Position != nil {
 		params.Position = pgtype.Float8{Float64: *req.Position, Valid: true}
@@ -733,6 +801,19 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.Updates.Priority != nil {
 			params.Priority = pgtype.Text{String: *req.Updates.Priority, Valid: true}
+		}
+		if _, ok := rawUpdates["category"]; ok {
+			if req.Updates.Category == nil || strings.TrimSpace(*req.Updates.Category) == "" {
+				continue
+			}
+			cat, valid := normalizeIssueCategory(*req.Updates.Category)
+			if !valid {
+				continue
+			}
+			if !h.canChangeIssueCategory(r.Context(), r, prevIssue, workspaceID) {
+				continue
+			}
+			params.Category = pgtype.Text{String: cat, Valid: true}
 		}
 		if req.Updates.Position != nil {
 			params.Position = pgtype.Float8{Float64: *req.Updates.Position, Valid: true}

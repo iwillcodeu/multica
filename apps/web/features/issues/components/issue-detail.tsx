@@ -57,9 +57,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from "@/components/ui/command";
 import { AvatarGroup, AvatarGroupCount } from "@/components/ui/avatar";
 import { ActorAvatar } from "@/components/common/actor-avatar";
-import type { UpdateIssueRequest, IssueStatus, IssuePriority, TimelineEntry } from "@/shared/types";
-import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon, DueDatePicker, AssigneePicker, canAssignAgent } from "@/features/issues/components";
+import type { UpdateIssueRequest, IssueStatus, IssuePriority, IssueCategory, TimelineEntry } from "@/shared/types";
+import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG, ISSUE_CATEGORIES, CATEGORY_CONFIG } from "@/features/issues/config";
+import { StatusIcon, PriorityIcon, CategoryIcon, DueDatePicker, AssigneePicker, canAssignAgent } from "@/features/issues/components";
+import { canEditIssueCategory } from "@/features/issues/utils/can-edit-issue-category";
 import { CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { AgentLiveCard, TaskRunHistory } from "./agent-live-card";
@@ -246,6 +247,9 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
     (currentMemberRole === "owner" ||
       currentMemberRole === "admin" ||
       (issue.creator_type === "member" && issue.creator_id === user?.id));
+
+  const canEditCategory =
+    !!issue && canEditIssueCategory(issue, user?.id, currentMemberRole);
 
   // Scroll to highlighted comment once timeline loads
   useEffect(() => {
@@ -504,6 +508,30 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                     ))}
                   </DropdownMenuSubContent>
                 </DropdownMenuSub>
+
+                {/* Category */}
+                {canEditCategory && (
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <CategoryIcon category={(issue.category ?? "task") as IssueCategory} className="h-3.5 w-3.5" />
+                      Category
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {ISSUE_CATEGORIES.map((c) => (
+                        <DropdownMenuItem
+                          key={c}
+                          onClick={() => handleUpdateField({ category: c })}
+                        >
+                          <CategoryIcon category={c} className="h-3.5 w-3.5" />
+                          {CATEGORY_CONFIG[c].label}
+                          {(issue.category ?? "task") === c && (
+                            <span className="ml-auto text-xs text-muted-foreground">✓</span>
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                )}
 
                 {/* Assignee */}
                 <DropdownMenuSub>
@@ -999,6 +1027,32 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
+              </PropRow>
+
+              {/* Category */}
+              <PropRow label="Category">
+                {canEditCategory ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger className="flex items-center gap-1.5 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors overflow-hidden">
+                      <CategoryIcon category={(issue.category ?? "task") as IssueCategory} />
+                      <span className="truncate">{CATEGORY_CONFIG[(issue.category ?? "task") as IssueCategory].label}</span>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-44">
+                      {ISSUE_CATEGORIES.map((c) => (
+                        <DropdownMenuItem key={c} onClick={() => handleUpdateField({ category: c })}>
+                          <CategoryIcon category={c} />
+                          <span>{CATEGORY_CONFIG[c].label}</span>
+                          {(issue.category ?? "task") === c && <Check className="ml-auto h-3.5 w-3.5" />}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-xs truncate">
+                    <CategoryIcon category={(issue.category ?? "task") as IssueCategory} />
+                    {CATEGORY_CONFIG[(issue.category ?? "task") as IssueCategory].label}
+                  </span>
+                )}
               </PropRow>
 
               {/* Priority */}
