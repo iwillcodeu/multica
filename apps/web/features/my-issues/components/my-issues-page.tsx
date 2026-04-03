@@ -171,23 +171,6 @@ export function MyIssuesPage() {
 
       {/* Content: scrollable */}
       <ViewStoreProvider store={myIssuesViewStore}>
-        <div className="flex flex-col flex-1 min-h-0">
-          {viewMode === "board" ? (
-            <BoardView
-              issues={issues}
-              allIssues={myIssues}
-              visibleStatuses={visibleStatuses}
-              hiddenStatuses={hiddenStatuses}
-              onMoveIssue={handleMoveIssue}
-            />
-          ) : (
-            <ListView
-              issues={issues}
-              visibleStatuses={visibleStatuses}
-              showProjectOnRows
-            />
-          )}
-        </div>
         {myIssues.length === 0 ? (
           <div className="flex flex-1 min-h-0 flex-col items-center justify-center gap-2 text-muted-foreground">
             <ListTodo className="h-10 w-10 text-muted-foreground/40" />
@@ -205,7 +188,11 @@ export function MyIssuesPage() {
                 onMoveIssue={handleMoveIssue}
               />
             ) : (
-              <ListView issues={issues} visibleStatuses={visibleStatuses} />
+              <ListView
+                issues={issues}
+                visibleStatuses={visibleStatuses}
+                showProjectOnRows
+              />
             )}
           </div>
         )}
