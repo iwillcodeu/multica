@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -38,6 +38,7 @@ import {
   useWorkspaceStore,
 } from "@/features/workspace";
 import type { Project } from "@/shared/types";
+import { useIssueStore } from "@/features/issues";
 import { savePersonalProjectTabOrder } from "../personal-project-tab-order";
 import { useProjectStore } from "../store";
 import { usePersonalProjectTabOrder } from "../use-personal-project-tab-order";
@@ -98,6 +99,7 @@ function SortableProjectTab({
 export function ProjectTabsRail() {
   const pathname = usePathname();
   const router = useRouter();
+  const issues = useIssueStore((s) => s.issues);
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
   const member = useCurrentWorkspaceMember();
@@ -142,10 +144,15 @@ export function ProjectTabsRail() {
     [orderedProjects, userId, workspaceId],
   );
 
-  const activeId =
-    pathname.startsWith("/projects/") && pathname.split("/")[2]
-      ? pathname.split("/")[2]
-      : null;
+  const activeId = useMemo(() => {
+    const parts = pathname.split("/").filter(Boolean);
+    if (parts[0] === "projects" && parts[1]) return parts[1];
+    if (parts[0] === "issues" && parts[1]) {
+      const issueId = parts[1];
+      return issues.find((i) => i.id === issueId)?.project_id ?? null;
+    }
+    return null;
+  }, [pathname, issues]);
 
   const handleCreate = async () => {
     const n = newName.trim();
