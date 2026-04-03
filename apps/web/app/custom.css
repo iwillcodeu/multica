@@ -25,8 +25,8 @@
   animation: entrance-spin 0.6s ease-out forwards;
 }
 
-/* Sidebar: open triggers (dropdown/popover) get active background */
+/* Sidebar: open triggers (dropdown/popover) — neutral hover like Gmail */
 [data-sidebar="menu-button"][data-popup-open] {
-  background-color: var(--sidebar-accent);
-  color: var(--sidebar-accent-foreground);
+  background-color: var(--sidebar-item-hover);
+  color: var(--sidebar-foreground);
 }

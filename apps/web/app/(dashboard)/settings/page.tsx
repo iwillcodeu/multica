@@ -36,7 +36,11 @@ export default function SettingsPage() {
             My Account
           </span>
           {accountTabs.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
+            <TabsTrigger
+              key={tab.value}
+              value={tab.value}
+              className="w-full justify-start rounded-full px-3 py-2 after:hidden hover:not-data-active:bg-sidebar-item-hover hover:not-data-active:text-foreground data-active:bg-selection-subtle data-active:text-selection-subtle-foreground dark:data-active:bg-selection-subtle dark:data-active:text-selection-subtle-foreground dark:hover:not-data-active:bg-sidebar-item-hover"
+            >
               <tab.icon className="h-4 w-4" />
               {tab.label}
             </TabsTrigger>
@@ -47,7 +51,11 @@ export default function SettingsPage() {
             {workspaceName ?? "Workspace"}
           </span>
           {workspaceTabs.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
+            <TabsTrigger
+              key={tab.value}
+              value={tab.value}
+              className="w-full justify-start rounded-full px-3 py-2 after:hidden hover:not-data-active:bg-sidebar-item-hover hover:not-data-active:text-foreground data-active:bg-selection-subtle data-active:text-selection-subtle-foreground dark:data-active:bg-selection-subtle dark:data-active:text-selection-subtle-foreground dark:hover:not-data-active:bg-sidebar-item-hover"
+            >
               <tab.icon className="h-4 w-4" />
               {tab.label}
             </TabsTrigger>

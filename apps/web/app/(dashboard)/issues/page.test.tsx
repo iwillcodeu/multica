@@ -129,6 +129,7 @@ const mockViewState = {
   viewMode: "board" as const,
   statusFilters: [] as string[],
   priorityFilters: [] as string[],
+  categoryFilters: [] as string[],
   assigneeFilters: [] as { type: string; id: string }[],
   includeNoAssignee: false,
   creatorFilters: [] as { type: string; id: string }[],
@@ -139,6 +140,7 @@ const mockViewState = {
   setViewMode: vi.fn(),
   toggleStatusFilter: vi.fn(),
   togglePriorityFilter: vi.fn(),
+  toggleCategoryFilter: vi.fn(),
   toggleAssigneeFilter: vi.fn(),
   toggleNoAssignee: vi.fn(),
   toggleCreatorFilter: vi.fn(),
@@ -200,6 +202,12 @@ vi.mock("@/features/issues/config", () => ({
     medium: { label: "Medium", bars: 2, color: "text-warning" },
     low: { label: "Low", bars: 1, color: "text-info" },
     none: { label: "No priority", bars: 0, color: "text-muted-foreground" },
+  },
+  ISSUE_CATEGORIES: ["bug", "feature", "task"],
+  CATEGORY_CONFIG: {
+    bug: { label: "Bug", badgeBg: "bg-destructive/15", badgeText: "text-destructive" },
+    feature: { label: "Feature", badgeBg: "bg-primary/15", badgeText: "text-primary" },
+    task: { label: "Task", badgeBg: "bg-muted", badgeText: "text-muted-foreground" },
   },
 }));
 
@@ -323,6 +331,7 @@ describe("IssuesPage", () => {
     mockViewState.viewMode = "board";
     mockViewState.statusFilters = [];
     mockViewState.priorityFilters = [];
+    mockViewState.categoryFilters = [];
   });
 
   it("shows loading state initially", () => {

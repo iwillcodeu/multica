@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import { createStore, type StoreApi } from "zustand/vanilla";
 import { persist } from "zustand/middleware";
-import type { IssueStatus, IssuePriority } from "@/shared/types";
+import type { IssueStatus, IssuePriority, IssueCategory } from "@/shared/types";
 import { ALL_STATUSES } from "@/features/issues/config";
 
 export type ViewMode = "board" | "list";
@@ -41,6 +41,7 @@ export interface IssueViewState {
   viewMode: ViewMode;
   statusFilters: IssueStatus[];
   priorityFilters: IssuePriority[];
+  categoryFilters: IssueCategory[];
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
@@ -51,6 +52,7 @@ export interface IssueViewState {
   setViewMode: (mode: ViewMode) => void;
   toggleStatusFilter: (status: IssueStatus) => void;
   togglePriorityFilter: (priority: IssuePriority) => void;
+  toggleCategoryFilter: (category: IssueCategory) => void;
   toggleAssigneeFilter: (value: ActorFilterValue) => void;
   toggleNoAssignee: () => void;
   toggleCreatorFilter: (value: ActorFilterValue) => void;
@@ -67,6 +69,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
   viewMode: "board",
   statusFilters: [],
   priorityFilters: [],
+  categoryFilters: [],
   assigneeFilters: [],
   includeNoAssignee: false,
   creatorFilters: [],
@@ -92,6 +95,12 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
       priorityFilters: state.priorityFilters.includes(priority)
         ? state.priorityFilters.filter((p) => p !== priority)
         : [...state.priorityFilters, priority],
+    })),
+  toggleCategoryFilter: (category) =>
+    set((state) => ({
+      categoryFilters: state.categoryFilters.includes(category)
+        ? state.categoryFilters.filter((c) => c !== category)
+        : [...state.categoryFilters, category],
     })),
   toggleAssigneeFilter: (value) =>
     set((state) => {
@@ -141,6 +150,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
     set({
       statusFilters: [],
       priorityFilters: [],
+      categoryFilters: [],
       assigneeFilters: [],
       includeNoAssignee: false,
       creatorFilters: [],
@@ -168,6 +178,7 @@ export const viewStorePersistOptions = (name: string) => ({
     viewMode: state.viewMode,
     statusFilters: state.statusFilters,
     priorityFilters: state.priorityFilters,
+    categoryFilters: state.categoryFilters,
     assigneeFilters: state.assigneeFilters,
     includeNoAssignee: state.includeNoAssignee,
     creatorFilters: state.creatorFilters,

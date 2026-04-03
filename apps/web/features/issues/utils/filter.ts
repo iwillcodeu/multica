@@ -1,9 +1,10 @@
-import type { Issue, IssueStatus, IssuePriority } from "@/shared/types";
+import type { Issue, IssueStatus, IssuePriority, IssueCategory } from "@/shared/types";
 import type { ActorFilterValue } from "@/features/issues/stores/view-store";
 
 export interface IssueFilters {
   statusFilters: IssueStatus[];
   priorityFilters: IssuePriority[];
+  categoryFilters: IssueCategory[];
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
@@ -19,7 +20,14 @@ export interface IssueFilters {
  * - When both → show matching assignees + unassigned
  */
 export function filterIssues(issues: Issue[], filters: IssueFilters): Issue[] {
-  const { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters } = filters;
+  const {
+    statusFilters,
+    priorityFilters,
+    categoryFilters,
+    assigneeFilters,
+    includeNoAssignee,
+    creatorFilters,
+  } = filters;
   const hasAssigneeFilter = assigneeFilters.length > 0 || includeNoAssignee;
 
   return issues.filter((issue) => {
@@ -27,6 +35,9 @@ export function filterIssues(issues: Issue[], filters: IssueFilters): Issue[] {
       return false;
 
     if (priorityFilters.length > 0 && !priorityFilters.includes(issue.priority))
+      return false;
+
+    if (categoryFilters.length > 0 && !categoryFilters.includes(issue.category))
       return false;
 
     if (hasAssigneeFilter) {

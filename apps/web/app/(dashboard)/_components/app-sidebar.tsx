@@ -192,7 +192,7 @@ export function AppSidebar() {
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<Link href={projectsHref} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className="text-muted-foreground data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />
                         <span>{item.label}</span>
@@ -219,7 +219,7 @@ export function AppSidebar() {
                       <SidebarMenuButton
                         isActive={isActive}
                         render={<Link href={item.href} />}
-                        className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        className="text-muted-foreground data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />
                         <span>{item.label}</span>

@@ -12,6 +12,7 @@ import {
   List,
   SignalHigh,
   SlidersHorizontal,
+  Tag,
   User,
   UserMinus,
   UserPen,
@@ -41,8 +42,10 @@ import {
   STATUS_CONFIG,
   PRIORITY_ORDER,
   PRIORITY_CONFIG,
+  ISSUE_CATEGORIES,
+  CATEGORY_CONFIG,
 } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
 import { useWorkspaceStore } from "@/features/workspace";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import {
@@ -55,7 +58,6 @@ import {
   useIssuesScopeStore,
   type IssuesScope,
 } from "@/features/issues/stores/issues-scope-store";
-import { filterIssues } from "@/features/issues/utils/filter";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Issue } from "@/shared/types";
 
@@ -84,6 +86,7 @@ function HoverCheck({ checked }: { checked: boolean }) {
 function getActiveFilterCount(state: {
   statusFilters: string[];
   priorityFilters: string[];
+  categoryFilters: string[];
   assigneeFilters: ActorFilterValue[];
   includeNoAssignee: boolean;
   creatorFilters: ActorFilterValue[];
@@ -91,6 +94,7 @@ function getActiveFilterCount(state: {
   let count = 0;
   if (state.statusFilters.length > 0) count++;
   if (state.priorityFilters.length > 0) count++;
+  if (state.categoryFilters.length > 0) count++;
   if (state.assigneeFilters.length > 0 || state.includeNoAssignee) count++;
   if (state.creatorFilters.length > 0) count++;
   return count;
@@ -100,6 +104,7 @@ function useIssueCounts(allIssues: Issue[]) {
   return useMemo(() => {
     const status = new Map<string, number>();
     const priority = new Map<string, number>();
+    const category = new Map<string, number>();
     const assignee = new Map<string, number>();
     const creator = new Map<string, number>();
     let noAssignee = 0;
@@ -107,6 +112,7 @@ function useIssueCounts(allIssues: Issue[]) {
     for (const issue of allIssues) {
       status.set(issue.status, (status.get(issue.status) ?? 0) + 1);
       priority.set(issue.priority, (priority.get(issue.priority) ?? 0) + 1);
+      category.set(issue.category, (category.get(issue.category) ?? 0) + 1);
 
       if (!issue.assignee_id) {
         noAssignee++;
@@ -119,7 +125,7 @@ function useIssueCounts(allIssues: Issue[]) {
       creator.set(cKey, (creator.get(cKey) ?? 0) + 1);
     }
 
-    return { status, priority, assignee, creator, noAssignee };
+    return { status, priority, category, assignee, creator, noAssignee };
   }, [allIssues]);
 }
 
@@ -279,6 +285,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const viewMode = useIssueViewStore((s) => s.viewMode);
   const statusFilters = useIssueViewStore((s) => s.statusFilters);
   const priorityFilters = useIssueViewStore((s) => s.priorityFilters);
+  const categoryFilters = useIssueViewStore((s) => s.categoryFilters);
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
@@ -293,6 +300,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
     getActiveFilterCount({
       statusFilters,
       priorityFilters,
+      categoryFilters,
       assigneeFilters,
       includeNoAssignee,
       creatorFilters,
@@ -314,8 +322,8 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
                   size="sm"
                   className={
                     scope === s.value
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                      : "text-muted-foreground"
+                      ? "rounded-full border-transparent bg-selection-subtle text-selection-subtle-foreground hover:bg-selection-subtle/90 dark:bg-selection-subtle dark:hover:bg-selection-subtle/90"
+                      : "rounded-full border-transparent text-muted-foreground hover:bg-sidebar-item-hover hover:text-foreground dark:hover:bg-sidebar-item-hover"
                   }
                   onClick={() => setScope(s.value)}
                 >
@@ -350,6 +358,42 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
             <TooltipContent side="bottom">Filter</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="end" className="w-auto">
+            {/* Category */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Tag className="size-3.5" />
+                <span className="flex-1">Categories</span>
+                {categoryFilters.length > 0 && (
+                  <span className="text-xs text-primary font-medium">
+                    {categoryFilters.length}
+                  </span>
+                )}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-auto min-w-44">
+                {ISSUE_CATEGORIES.map((c) => {
+                  const checked = categoryFilters.includes(c);
+                  const count = counts.category.get(c) ?? 0;
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={c}
+                      checked={checked}
+                      onCheckedChange={() => act.toggleCategoryFilter(c)}
+                      className={FILTER_ITEM_CLASS}
+                    >
+                      <HoverCheck checked={checked} />
+                      <CategoryIcon category={c} className="h-3.5 w-3.5" />
+                      {CATEGORY_CONFIG[c].label}
+                      {count > 0 && (
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          {count} {count === 1 ? "issue" : "issues"}
+                        </span>
+                      )}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
             {/* Status */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>

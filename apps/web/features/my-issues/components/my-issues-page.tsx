@@ -31,6 +31,7 @@ export function MyIssuesPage() {
   const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
+  const categoryFilters = useStore(myIssuesViewStore, (s) => s.categoryFilters);
   const scope = useStore(myIssuesViewStore, (s) => s.scope);
 
   useEffect(() => {
@@ -88,11 +89,12 @@ export function MyIssuesPage() {
       filterIssues(myIssues, {
         statusFilters,
         priorityFilters,
+        categoryFilters,
         assigneeFilters: [],
         includeNoAssignee: false,
         creatorFilters: [],
       }),
-    [myIssues, statusFilters, priorityFilters],
+    [myIssues, statusFilters, priorityFilters, categoryFilters],
   );
 
   const visibleStatuses = useMemo(() => {

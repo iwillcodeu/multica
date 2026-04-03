@@ -78,11 +78,11 @@ function SortableProjectTab({
             <Link
               href={`/projects/${project.id}`}
               className={cn(
-                "flex min-h-[72px] max-h-28 w-full items-center justify-center rounded-md px-0.5 py-1 text-[11px] font-medium leading-tight transition-colors",
+                "flex min-h-[72px] max-h-28 w-full items-center justify-center rounded-full px-0.5 py-1 text-[11px] font-medium leading-tight transition-colors",
                 "[writing-mode:vertical-rl]",
                 active
                   ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-muted-foreground hover:bg-accent/80 hover:text-foreground",
+                  : "text-muted-foreground hover:bg-sidebar-item-hover hover:text-foreground",
                 isDragging && "pointer-events-none opacity-60",
               )}
             >

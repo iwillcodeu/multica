@@ -4,6 +4,11 @@ import { Suspense, useState, useEffect, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuthStore } from "@/features/auth";
 import { useWorkspaceStore } from "@/features/workspace";
+import {
+  resolveDefaultBoardPath,
+  shouldResolveFirstProject,
+  useProjectStore,
+} from "@/features/projects";
 import { api } from "@/shared/api";
 import {
   Card,
@@ -61,11 +66,32 @@ function LoginPageContent() {
   const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const searchParams = useSearchParams();
 
-  // Already authenticated — redirect to dashboard
+  // Already authenticated — redirect to dashboard (first project board when `next` is /projects)
   useEffect(() => {
-    if (!isLoading && user && !searchParams.get("cli_callback")) {
-      router.replace(searchParams.get("next") || "/projects");
+    if (isLoading || !user || searchParams.get("cli_callback")) return;
+
+    const next = searchParams.get("next");
+    if (!shouldResolveFirstProject(next)) {
+      router.replace(next!);
+      return;
     }
+
+    const go = () => {
+      router.replace(resolveDefaultBoardPath(next));
+    };
+
+    if (!useProjectStore.getState().loading) {
+      go();
+      return;
+    }
+
+    const unsub = useProjectStore.subscribe((s) => {
+      if (!s.loading) {
+        go();
+        unsub();
+      }
+    });
+    return () => unsub();
   }, [isLoading, user, router, searchParams]);
 
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
@@ -144,7 +170,7 @@ function LoginPageContent() {
       await loginPassword(email.trim(), password);
       const wsList = await api.listWorkspaces();
       await hydrateWorkspace(wsList);
-      router.push(searchParams.get("next") || "/projects");
+      router.push(resolveDefaultBoardPath(searchParams.get("next")));
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Sign-in failed",
@@ -199,7 +225,7 @@ function LoginPageContent() {
         await verifyCode(email, value);
         const wsList = await api.listWorkspaces();
         await hydrateWorkspace(wsList);
-        router.push(searchParams.get("next") || "/projects");
+        router.push(resolveDefaultBoardPath(searchParams.get("next")));
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Invalid or expired code"
@@ -330,7 +356,7 @@ function LoginPageContent() {
     <div className="flex min-h-screen items-center justify-center">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Multica</CardTitle>
+          <CardTitle className="text-2xl">Human and AI Working Together</CardTitle>
           <CardDescription>Turn coding agents into real teammates</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -348,7 +374,7 @@ function LoginPageContent() {
                 setPasswordVisible(false);
               }}
             >
-              Password
+              Password for existing
             </button>
             <button
               type="button"
@@ -362,7 +388,7 @@ function LoginPageContent() {
                 setError("");
               }}
             >
-              Email code
+              Email code for new
             </button>
           </div>
 
@@ -426,8 +452,8 @@ function LoginPageContent() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                New users get a verification code and a personal workspace. Existing accounts without a
-                password also use this path.
+                New users get a verification code and a personal workspace.
+                新用户创建新的工作空间用邮件验证码初始化登录。
               </p>
               {error && <p className="text-sm text-destructive">{error}</p>}
             </form>

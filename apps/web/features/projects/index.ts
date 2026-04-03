@@ -6,3 +6,7 @@ export {
   orderProjectsByPersonalPreference,
 } from "./personal-project-tab-order";
 export { usePersonalProjectTabOrder } from "./use-personal-project-tab-order";
+export {
+  resolveDefaultBoardPath,
+  shouldResolveFirstProject,
+} from "./resolve-default-board-path";

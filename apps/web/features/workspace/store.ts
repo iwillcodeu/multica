@@ -4,7 +4,7 @@ import { create } from "zustand";
 import type { Workspace, MemberWithUser, Agent, Skill } from "@/shared/types";
 import { useIssueStore } from "@/features/issues";
 import { useInboxStore } from "@/features/inbox";
-import { useProjectStore } from "@/features/projects";
+import { useProjectStore } from "@/features/projects/store";
 import { useRuntimeStore } from "@/features/runtimes";
 import { toast } from "sonner";
 import { api } from "@/shared/api";

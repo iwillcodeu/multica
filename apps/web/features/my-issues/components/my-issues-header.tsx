@@ -13,6 +13,7 @@ import {
   List,
   SignalHigh,
   SlidersHorizontal,
+  Tag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -39,13 +40,14 @@ import {
   STATUS_CONFIG,
   PRIORITY_ORDER,
   PRIORITY_CONFIG,
+  ISSUE_CATEGORIES,
+  CATEGORY_CONFIG,
 } from "@/features/issues/config";
-import { StatusIcon, PriorityIcon } from "@/features/issues/components";
+import { StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
 import {
   SORT_OPTIONS,
   CARD_PROPERTY_OPTIONS,
 } from "@/features/issues/stores/view-store";
-import { filterIssues } from "@/features/issues/utils/filter";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Issue } from "@/shared/types";
 import { myIssuesViewStore, type MyIssuesScope } from "../stores/my-issues-view-store";
@@ -75,10 +77,12 @@ function HoverCheck({ checked }: { checked: boolean }) {
 function getActiveFilterCount(state: {
   statusFilters: string[];
   priorityFilters: string[];
+  categoryFilters: string[];
 }) {
   let count = 0;
   if (state.statusFilters.length > 0) count++;
   if (state.priorityFilters.length > 0) count++;
+  if (state.categoryFilters.length > 0) count++;
   return count;
 }
 
@@ -86,13 +90,15 @@ function useIssueCounts(allIssues: Issue[]) {
   return useMemo(() => {
     const status = new Map<string, number>();
     const priority = new Map<string, number>();
+    const category = new Map<string, number>();
 
     for (const issue of allIssues) {
       status.set(issue.status, (status.get(issue.status) ?? 0) + 1);
       priority.set(issue.priority, (priority.get(issue.priority) ?? 0) + 1);
+      category.set(issue.category, (category.get(issue.category) ?? 0) + 1);
     }
 
-    return { status, priority };
+    return { status, priority, category };
   }, [allIssues]);
 }
 
@@ -114,6 +120,7 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
+  const categoryFilters = useStore(myIssuesViewStore, (s) => s.categoryFilters);
   const sortBy = useStore(myIssuesViewStore, (s) => s.sortBy);
   const sortDirection = useStore(myIssuesViewStore, (s) => s.sortDirection);
   const cardProperties = useStore(myIssuesViewStore, (s) => s.cardProperties);
@@ -123,7 +130,7 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const counts = useIssueCounts(allIssues);
 
   const hasActiveFilters =
-    getActiveFilterCount({ statusFilters, priorityFilters }) > 0;
+    getActiveFilterCount({ statusFilters, priorityFilters, categoryFilters }) > 0;
 
   const sortLabel =
     SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? "Manual";
@@ -141,8 +148,8 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
                   size="sm"
                   className={
                     scope === s.value
-                      ? "bg-accent text-accent-foreground hover:bg-accent/80"
-                      : "text-muted-foreground"
+                      ? "rounded-full border-transparent bg-selection-subtle text-selection-subtle-foreground hover:bg-selection-subtle/90 dark:bg-selection-subtle dark:hover:bg-selection-subtle/90"
+                      : "rounded-full border-transparent text-muted-foreground hover:bg-sidebar-item-hover hover:text-foreground dark:hover:bg-sidebar-item-hover"
                   }
                   onClick={() => act.setScope(s.value)}
                 >
@@ -177,6 +184,42 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
             <TooltipContent side="bottom">Filter</TooltipContent>
           </Tooltip>
           <DropdownMenuContent align="end" className="w-auto">
+            {/* Category */}
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Tag className="size-3.5" />
+                <span className="flex-1">Categories</span>
+                {categoryFilters.length > 0 && (
+                  <span className="text-xs text-primary font-medium">
+                    {categoryFilters.length}
+                  </span>
+                )}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="w-auto min-w-44">
+                {ISSUE_CATEGORIES.map((c) => {
+                  const checked = categoryFilters.includes(c);
+                  const count = counts.category.get(c) ?? 0;
+                  return (
+                    <DropdownMenuCheckboxItem
+                      key={c}
+                      checked={checked}
+                      onCheckedChange={() => act.toggleCategoryFilter(c)}
+                      className={FILTER_ITEM_CLASS}
+                    >
+                      <HoverCheck checked={checked} />
+                      <CategoryIcon category={c} className="h-3.5 w-3.5" />
+                      {CATEGORY_CONFIG[c].label}
+                      {count > 0 && (
+                        <span className="ml-auto text-xs text-muted-foreground">
+                          {count} {count === 1 ? "issue" : "issues"}
+                        </span>
+                      )}
+                    </DropdownMenuCheckboxItem>
+                  );
+                })}
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+
             {/* Status */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>

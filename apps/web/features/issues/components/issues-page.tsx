@@ -46,6 +46,7 @@ export function IssuesPage({ projectId }: { projectId?: string | null }) {
   const viewMode = useIssueViewStore((s) => s.viewMode);
   const statusFilters = useIssueViewStore((s) => s.statusFilters);
   const priorityFilters = useIssueViewStore((s) => s.priorityFilters);
+  const categoryFilters = useIssueViewStore((s) => s.categoryFilters);
   const assigneeFilters = useIssueViewStore((s) => s.assigneeFilters);
   const includeNoAssignee = useIssueViewStore((s) => s.includeNoAssignee);
   const creatorFilters = useIssueViewStore((s) => s.creatorFilters);
@@ -76,8 +77,24 @@ export function IssuesPage({ projectId }: { projectId?: string | null }) {
   }, [allIssues, scope]);
 
   const issues = useMemo(
-    () => filterIssues(scopedIssues, { statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters }),
-    [scopedIssues, statusFilters, priorityFilters, assigneeFilters, includeNoAssignee, creatorFilters],
+    () =>
+      filterIssues(scopedIssues, {
+        statusFilters,
+        priorityFilters,
+        categoryFilters,
+        assigneeFilters,
+        includeNoAssignee,
+        creatorFilters,
+      }),
+    [
+      scopedIssues,
+      statusFilters,
+      priorityFilters,
+      categoryFilters,
+      assigneeFilters,
+      includeNoAssignee,
+      creatorFilters,
+    ],
   );
 
   const visibleStatuses = useMemo(() => {
