@@ -26,8 +26,13 @@ type S3Storage struct {
 //
 // Environment variables:
 //   - S3_BUCKET (required)
-//   - S3_REGION (default: us-west-2)
-//   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (optional; falls back to default credential chain)
+//   - S3_REGION (default: us-west-2; for Aliyun OSS use the OSS region id, e.g. oss-cn-hangzhou)
+//   - S3_ENDPOINT (optional) — custom S3 API base URL for Aliyun OSS, MinIO, R2, etc.
+//     Example OSS: https://oss-cn-hangzhou.aliyuncs.com
+//   - S3_USE_PATH_STYLE=1 (optional) — path-style URLs; often needed for MinIO
+//   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (optional; highest priority when both set)
+//   - MULTICA_CREDENTIALS_INI (optional) — path to an INI file with [credentials] and
+//     alibaba_cloud_access_key_id / alibaba_cloud_access_key_secret (used when env keys are not both set)
 func NewS3StorageFromEnv() *S3Storage {
 	bucket := os.Getenv("S3_BUCKET")
 	if bucket == "" {
@@ -44,8 +49,20 @@ func NewS3StorageFromEnv() *S3Storage {
 		config.WithRegion(region),
 	}
 
-	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
-	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	accessKey := strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID"))
+	secretKey := strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY"))
+	if accessKey == "" || secretKey == "" {
+		iniPath := strings.TrimSpace(os.Getenv("MULTICA_CREDENTIALS_INI"))
+		if iniPath != "" {
+			id, sec, err := ReadAlibabaCloudCredentialsFromINI(iniPath)
+			if err != nil {
+				slog.Error("MULTICA_CREDENTIALS_INI invalid", "path", iniPath, "error", err)
+				return nil
+			}
+			accessKey, secretKey = id, sec
+			slog.Info("loaded object storage credentials from INI", "path", iniPath)
+		}
+	}
 	if accessKey != "" && secretKey != "" {
 		opts = append(opts, config.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(accessKey, secretKey, ""),
@@ -59,13 +76,35 @@ func NewS3StorageFromEnv() *S3Storage {
 	}
 
 	cdnDomain := os.Getenv("CLOUDFRONT_DOMAIN")
+	endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
+	pathStyle := os.Getenv("S3_USE_PATH_STYLE") == "1" || strings.EqualFold(os.Getenv("S3_USE_PATH_STYLE"), "true")
 
-	slog.Info("S3 storage initialized", "bucket", bucket, "region", region, "cdn_domain", cdnDomain)
+	s3Opts := []func(*s3.Options){}
+	if endpoint != "" {
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+			o.UsePathStyle = pathStyle
+			// Aliyun OSS and other S3-compatible APIs reject AWS SDK v2's default
+			// aws-chunked + x-amz-checksum-* PutObject behavior (400 InvalidArgument).
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		})
+	}
+
+	client := s3.NewFromConfig(cfg, s3Opts...)
+
+	slog.Info("S3 storage initialized", "bucket", bucket, "region", region, "endpoint", endpointOrDefault(endpoint), "cdn_domain", cdnDomain)
 	return &S3Storage{
-		client:    s3.NewFromConfig(cfg),
+		client:    client,
 		bucket:    bucket,
 		cdnDomain: cdnDomain,
 	}
+}
+
+func endpointOrDefault(endpoint string) string {
+	if endpoint == "" {
+		return "(aws default)"
+	}
+	return endpoint
 }
 
 // sanitizeFilename removes characters that could cause header injection in Content-Disposition.
@@ -125,15 +164,19 @@ func (s *S3Storage) DeleteKeys(ctx context.Context, keys []string) {
 
 func (s *S3Storage) Upload(ctx context.Context, key string, data []byte, contentType string, filename string) (string, error) {
 	safe := sanitizeFilename(filename)
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+	put := &s3.PutObjectInput{
 		Bucket:             aws.String(s.bucket),
 		Key:                aws.String(key),
 		Body:               bytes.NewReader(data),
 		ContentType:        aws.String(contentType),
 		ContentDisposition: aws.String(fmt.Sprintf(`inline; filename="%s"`, safe)),
 		CacheControl:       aws.String("max-age=432000,public"),
-		StorageClass:       types.StorageClassIntelligentTiering,
-	})
+	}
+	// INTELLIGENT_TIERING is AWS-specific; omit for S3-compatible endpoints (OSS, MinIO, R2).
+	if strings.TrimSpace(os.Getenv("S3_ENDPOINT")) == "" {
+		put.StorageClass = types.StorageClassIntelligentTiering
+	}
+	_, err := s.client.PutObject(ctx, put)
 	if err != nil {
 		return "", fmt.Errorf("s3 PutObject: %w", err)
 	}
