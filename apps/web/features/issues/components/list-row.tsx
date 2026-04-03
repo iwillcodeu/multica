@@ -7,6 +7,7 @@ import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useIssueSelectionStore } from "@/features/issues/stores/selection-store";
 import { useProjectStore } from "@/features/projects";
 import { PriorityIcon } from "./priority-icon";
+import { CategoryIcon } from "./category-icon";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
@@ -35,19 +36,22 @@ export const ListRow = memo(function ListRow({
         selected ? "bg-accent/30" : ""
       }`}
     >
-      <div className="relative flex shrink-0 items-center justify-center w-4 h-4">
-        <PriorityIcon
-          priority={issue.priority}
-          className={selected ? "hidden" : "group-hover/row:hidden"}
-        />
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={() => toggle(issue.id)}
-          className={`absolute inset-0 cursor-pointer accent-primary ${
-            selected ? "" : "hidden group-hover/row:block"
-          }`}
-        />
+      <div className="flex shrink-0 items-center gap-1">
+        <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => toggle(issue.id)}
+            aria-label={`Select issue ${issue.identifier}`}
+            className={`h-3.5 w-3.5 cursor-pointer accent-primary ${
+              selected
+                ? "opacity-100"
+                : "pointer-events-none opacity-0 group-hover/row:pointer-events-auto group-hover/row:opacity-100"
+            }`}
+          />
+        </div>
+        <CategoryIcon category={issue.category} className="h-3.5 w-3.5" />
+        <PriorityIcon priority={issue.priority} />
       </div>
       <Link
         href={`/issues/${issue.id}`}
