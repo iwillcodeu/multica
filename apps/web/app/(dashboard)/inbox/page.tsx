@@ -4,8 +4,15 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { useDefaultLayout } from "react-resizable-panels";
 import { useInboxStore } from "@/features/inbox";
-import { IssueDetail, StatusIcon, PriorityIcon } from "@/features/issues/components";
-import { STATUS_CONFIG, PRIORITY_CONFIG } from "@/features/issues/config";
+import { IssueDetail, StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
+import {
+  STATUS_CONFIG,
+  PRIORITY_CONFIG,
+  ISSUE_CATEGORIES,
+  PRIORITY_ORDER,
+  CATEGORY_CONFIG,
+} from "@/features/issues/config";
+import { useIssueStore } from "@/features/issues";
 import { useActorName } from "@/features/workspace";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { toast } from "sonner";
@@ -18,7 +25,13 @@ import {
   BookCheck,
   ListChecks,
 } from "lucide-react";
-import type { InboxItem, InboxItemType, IssueStatus, IssuePriority } from "@/shared/types";
+import type {
+  InboxItem,
+  InboxItemType,
+  IssueCategory,
+  IssuePriority,
+  IssueStatus,
+} from "@/shared/types";
 import { Button } from "@/components/ui/button";
 import {
   ResizablePanelGroup,
@@ -73,6 +86,28 @@ function shortDate(dateStr: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function coalesceIssueCategory(
+  raw: string | null | undefined,
+  fallback?: IssueCategory,
+): IssueCategory {
+  if (raw && ISSUE_CATEGORIES.includes(raw as IssueCategory)) {
+    return raw as IssueCategory;
+  }
+  if (fallback && ISSUE_CATEGORIES.includes(fallback)) return fallback;
+  return "task";
+}
+
+function coalesceIssuePriority(
+  raw: string | null | undefined,
+  fallback?: IssuePriority,
+): IssuePriority {
+  if (raw && PRIORITY_ORDER.includes(raw as IssuePriority)) {
+    return raw as IssuePriority;
+  }
+  if (fallback && PRIORITY_ORDER.includes(fallback)) return fallback;
+  return "none";
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +188,12 @@ function InboxListItem({
   onClick: () => void;
   onArchive: () => void;
 }) {
+  const storeIssue = useIssueStore((s) =>
+    item.issue_id ? s.issues.find((i) => i.id === item.issue_id) : undefined,
+  );
+  const category = coalesceIssueCategory(item.issue_category ?? undefined, storeIssue?.category);
+  const priority = coalesceIssuePriority(item.issue_priority ?? undefined, storeIssue?.priority);
+
   return (
     <button
       onClick={onClick}
@@ -160,6 +201,15 @@ function InboxListItem({
         isSelected ? "bg-accent" : "hover:bg-accent/50"
       }`}
     >
+      {item.issue_id ? (
+        <div
+          className="flex shrink-0 items-center gap-1"
+          title={`${CATEGORY_CONFIG[category].label} · ${PRIORITY_CONFIG[priority].label}`}
+        >
+          <CategoryIcon category={category} className="h-3.5 w-3.5" />
+          <PriorityIcon priority={priority} className="h-3.5 w-3.5" />
+        </div>
+      ) : null}
       <ActorAvatar
         actorType={item.actor_type ?? item.recipient_type}
         actorId={item.actor_id ?? item.recipient_id}
@@ -425,7 +475,7 @@ export default function InboxPage() {
           <IssueDetail
             key={selected.id}
             issueId={selected.issue_id}
-            defaultSidebarOpen={false}
+            defaultSidebarOpen
             layoutId="multica_inbox_issue_detail_layout"
             highlightCommentId={selected.details?.comment_id ?? undefined}
             onDelete={() => {

@@ -93,9 +93,11 @@ export function useRealtimeSync(ws: WSClient | null) {
       const { issue } = p as IssueUpdatedPayload;
       if (!issue?.id) return;
       useIssueStore.getState().updateIssue(issue.id, issue);
-      if (issue.status) {
-        useInboxStore.getState().updateIssueStatus(issue.id, issue.status);
-      }
+      useInboxStore.getState().patchIssueSnapshot(issue.id, {
+        issue_status: issue.status,
+        issue_priority: issue.priority,
+        issue_category: issue.category,
+      });
     });
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {

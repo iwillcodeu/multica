@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { InboxItem, IssueStatus } from "@/shared/types";
+import type { InboxItem, IssueCategory, IssuePriority, IssueStatus } from "@/shared/types";
 import { toast } from "sonner";
 import { api } from "@/shared/api";
 import { createLogger } from "@/shared/logger";
@@ -54,7 +54,14 @@ interface InboxState {
   markAllRead: () => void;
   archiveAll: () => void;
   archiveAllRead: () => void;
-  updateIssueStatus: (issueId: string, status: IssueStatus) => void;
+  patchIssueSnapshot: (
+    issueId: string,
+    patch: {
+      issue_status?: IssueStatus;
+      issue_priority?: IssuePriority;
+      issue_category?: IssueCategory;
+    },
+  ) => void;
   dedupedItems: () => InboxItem[];
   unreadCount: () => number;
 }
@@ -107,10 +114,10 @@ export const useInboxStore = create<InboxState>((set, get) => ({
         i.read && !i.archived ? { ...i, archived: true } : i
       ),
     })),
-  updateIssueStatus: (issueId, status) =>
+  patchIssueSnapshot: (issueId, patch) =>
     set((s) => ({
       items: s.items.map((i) =>
-        i.issue_id === issueId ? { ...i, issue_status: status } : i
+        i.issue_id === issueId ? { ...i, ...patch } : i
       ),
     })),
   dedupedItems: () => deduplicateInboxItems(get().items),
