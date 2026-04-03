@@ -393,7 +393,8 @@ describe("IssuesPage", () => {
 
     render(<IssuesPage projectId="proj-1" />);
 
-    // Should still render the board/list view, not a "no issues" message
     expect(screen.queryByText("No matching issues")).not.toBeInTheDocument();
+    expect(screen.queryByText("No issues yet")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Backlog").length).toBeGreaterThanOrEqual(1);
   });
 });
