@@ -25,14 +25,17 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
-import { RichTextEditor, type RichTextEditorRef } from "@/components/common/rich-text-editor";
-import { TitleEditor } from "@/components/common/title-editor";
-import { StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
-import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG, ISSUE_CATEGORIES, CATEGORY_CONFIG } from "@/features/issues/config";
 import { ContentEditor, type ContentEditorRef } from "@/features/editor";
 import { TitleEditor } from "@/features/editor";
-import { StatusIcon, PriorityIcon } from "@/features/issues/components";
-import { ALL_STATUSES, STATUS_CONFIG, PRIORITY_ORDER, PRIORITY_CONFIG } from "@/features/issues/config";
+import { StatusIcon, PriorityIcon, CategoryIcon } from "@/features/issues/components";
+import {
+  ALL_STATUSES,
+  STATUS_CONFIG,
+  PRIORITY_ORDER,
+  PRIORITY_CONFIG,
+  ISSUE_CATEGORIES,
+  CATEGORY_CONFIG,
+} from "@/features/issues/config";
 import { useWorkspaceStore, useActorName } from "@/features/workspace";
 import { useProjectStore } from "@/features/projects";
 import { useIssueStore } from "@/features/issues";
@@ -243,7 +246,7 @@ export function CreateIssueModal({ onClose, data }: { onClose: () => void; data?
             defaultValue={draft.title}
             placeholder="Issue title"
             className="text-lg font-semibold"
-            onChange={(v) => updateTitle(v)}
+            onChange={(v: string) => updateTitle(v)}
             onSubmit={handleSubmit}
           />
         </div>
