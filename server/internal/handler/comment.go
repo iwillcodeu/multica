@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -58,10 +60,81 @@ func (h *Handler) ListComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	comments, err := h.Queries.ListComments(r.Context(), db.ListCommentsParams{
-		IssueID:     issue.ID,
-		WorkspaceID: issue.WorkspaceID,
-	})
+	// Parse optional pagination query params.
+	q := r.URL.Query()
+	var limit, offset int32
+	var hasPagination bool
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			writeError(w, http.StatusBadRequest, "invalid limit parameter")
+			return
+		}
+		limit = int32(n)
+		hasPagination = true
+	}
+	if v := q.Get("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			writeError(w, http.StatusBadRequest, "invalid offset parameter")
+			return
+		}
+		offset = int32(n)
+		hasPagination = true
+	}
+
+	var sinceTime pgtype.Timestamptz
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid since parameter; expected RFC3339 format")
+			return
+		}
+		sinceTime = pgtype.Timestamptz{Time: t, Valid: true}
+	}
+
+	var comments []db.Comment
+	var err error
+
+	switch {
+	case sinceTime.Valid && hasPagination:
+		if limit == 0 {
+			limit = 50
+		}
+		comments, err = h.Queries.ListCommentsSincePaginated(r.Context(), db.ListCommentsSincePaginatedParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			CreatedAt:   sinceTime,
+			Limit:       limit,
+			Offset:      offset,
+		})
+	case sinceTime.Valid:
+		// Apply a server-side cap to prevent unbounded result sets when
+		// --since is used without --limit.
+		comments, err = h.Queries.ListCommentsSincePaginated(r.Context(), db.ListCommentsSincePaginatedParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			CreatedAt:   sinceTime,
+			Limit:       500,
+			Offset:      0,
+		})
+		hasPagination = true
+	case hasPagination:
+		if limit == 0 {
+			limit = 50
+		}
+		comments, err = h.Queries.ListCommentsPaginated(r.Context(), db.ListCommentsPaginatedParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			Limit:       limit,
+			Offset:      offset,
+		})
+	default:
+		comments, err = h.Queries.ListComments(r.Context(), db.ListCommentsParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+		})
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list comments")
 		return
@@ -78,6 +151,17 @@ func (h *Handler) ListComments(w http.ResponseWriter, r *http.Request) {
 	for i, c := range comments {
 		cid := uuidToString(c.ID)
 		resp[i] = commentToResponse(c, grouped[cid], groupedAtt[cid])
+	}
+
+	// Include total count in response header when paginating.
+	if hasPagination {
+		total, countErr := h.Queries.CountComments(r.Context(), db.CountCommentsParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+		})
+		if countErr == nil {
+			w.Header().Set("X-Total-Count", strconv.FormatInt(total, 10))
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -188,7 +272,8 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger @mentioned agents: parse agent mentions and enqueue tasks for each.
-	h.enqueueMentionedAgentTasks(r.Context(), issue, comment, authorType, authorID)
+	// Pass parentComment so that replies inherit mentions from the thread root.
+	h.enqueueMentionedAgentTasks(r.Context(), issue, comment, parentComment, authorType, authorID)
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -201,8 +286,16 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 // is announcing to everyone, not specifically requesting work from the agent.
 func (h *Handler) commentMentionsOthersButNotAssignee(content string, issue db.Issue) bool {
 	mentions := util.ParseMentions(content)
+	// Filter out issue mentions — they are cross-references, not @people.
+	filtered := mentions[:0]
+	for _, m := range mentions {
+		if m.Type != "issue" {
+			filtered = append(filtered, m)
+		}
+	}
+	mentions = filtered
 	if len(mentions) == 0 {
-		return false // No mentions — normal on_comment behavior
+		return false // No mentions (or only issue refs) — normal on_comment behavior
 	}
 	// @all is a broadcast to all members — suppress agent trigger.
 	if util.HasMentionAll(mentions) {
@@ -226,6 +319,8 @@ func (h *Handler) commentMentionsOthersButNotAssignee(content string, issue db.I
 // continuing a human conversation — not requesting work from the assigned agent.
 // Replying to an agent-started thread, or explicitly @mentioning the assignee
 // in the reply, still triggers on_comment as expected.
+// If the parent (thread root) itself @mentions the assignee, the thread is
+// considered a conversation with the agent, so replies are allowed to trigger.
 func (h *Handler) isReplyToMemberThread(parent *db.Comment, content string, issue db.Issue) bool {
 	if parent == nil {
 		return false // Not a reply — normal top-level comment
@@ -234,30 +329,56 @@ func (h *Handler) isReplyToMemberThread(parent *db.Comment, content string, issu
 		return false // Thread started by an agent — allow trigger
 	}
 	// Thread was started by a member. Suppress on_comment unless the reply
-	// explicitly @mentions the assignee agent.
+	// or the parent explicitly @mentions the assignee agent.
 	if !issue.AssigneeID.Valid {
 		return true // No assignee to mention
 	}
 	assigneeID := uuidToString(issue.AssigneeID)
+	// Check current comment mentions.
 	for _, m := range util.ParseMentions(content) {
 		if m.ID == assigneeID {
-			return false // Assignee explicitly mentioned — allow trigger
+			return false // Assignee explicitly mentioned in reply — allow trigger
+		}
+	}
+	// Check parent (thread root) mentions — if the thread was started by
+	// mentioning the assignee, replies continue that conversation.
+	for _, m := range util.ParseMentions(parent.Content) {
+		if m.ID == assigneeID {
+			return false // Assignee mentioned in thread root — allow trigger
 		}
 	}
 	return true // Reply to member thread without mentioning agent — suppress
 }
 
 // enqueueMentionedAgentTasks parses @agent mentions from comment content and
-// enqueues a task for each mentioned agent. Skips self-mentions, agents that
-// are already the issue's assignee (handled by on_comment), agents with
-// on_mention trigger disabled, and private agents mentioned by non-owner
-// members (only the agent owner or workspace admin/owner can mention a
-// private agent).
+// enqueues a task for each mentioned agent. When parentComment is non-nil
+// (i.e. the comment is a reply), mentions from the parent (thread root) are
+// also included so that agents mentioned in the top-level comment are
+// re-triggered by subsequent replies in the same thread.
+// Skips self-mentions, agents that are already the issue's assignee (handled
+// by on_comment), agents with on_mention trigger disabled, and private agents
+// mentioned by non-owner members (only the agent owner or workspace
+// admin/owner can mention a private agent).
 // Note: no status gate here — @mention is an explicit action and should work
 // even on done/cancelled issues (the agent can reopen the issue if needed).
-func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue, comment db.Comment, authorType, authorID string) {
+func (h *Handler) enqueueMentionedAgentTasks(ctx context.Context, issue db.Issue, comment db.Comment, parentComment *db.Comment, authorType, authorID string) {
 	wsID := uuidToString(issue.WorkspaceID)
 	mentions := util.ParseMentions(comment.Content)
+	// When replying in a thread, also include mentions from the parent comment
+	// so that agents mentioned in the thread root are triggered by replies.
+	if parentComment != nil {
+		parentMentions := util.ParseMentions(parentComment.Content)
+		seen := make(map[string]bool, len(mentions))
+		for _, m := range mentions {
+			seen[m.Type+":"+m.ID] = true
+		}
+		for _, m := range parentMentions {
+			if !seen[m.Type+":"+m.ID] {
+				mentions = append(mentions, m)
+				seen[m.Type+":"+m.ID] = true
+			}
+		}
+	}
 	for _, m := range mentions {
 		if m.Type != "agent" {
 			continue

@@ -44,9 +44,9 @@ import {
   DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
-import { RichTextEditor } from "@/components/common/rich-text-editor";
+import { ContentEditor, type ContentEditorRef } from "@/features/editor";
 import { FileUploadButton } from "@/components/common/file-upload-button";
-import { TitleEditor } from "@/components/common/title-editor";
+import { TitleEditor } from "@/features/editor";
 import {
   Tooltip,
   TooltipTrigger,
@@ -201,6 +201,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const didHighlightRef = useRef<string | null>(null);
 
   // Single source of truth: read issue directly from global store
   const issue = useIssueStore((s) => s.issues.find((i) => i.id === id)) ?? null;
@@ -252,16 +253,16 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
     !!issue && canEditIssueCategory(issue, user?.id, currentMemberRole);
 
   // Scroll to highlighted comment once timeline loads
+  // Scroll to highlighted comment once timeline loads (fire only once per highlightCommentId)
   useEffect(() => {
     if (!highlightCommentId || timeline.length === 0) return;
-    // Find the comment element — could be a top-level comment or a reply
+    if (didHighlightRef.current === highlightCommentId) return;
     const el = document.getElementById(`comment-${highlightCommentId}`);
     if (el) {
-      // Small delay to ensure layout is settled
+      didHighlightRef.current = highlightCommentId;
       requestAnimationFrame(() => {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         setHighlightedId(highlightCommentId);
-        // Clear highlight after animation
         const timer = setTimeout(() => setHighlightedId(null), 2000);
         return () => clearTimeout(timer);
       });
@@ -299,7 +300,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
     [issue, id],
   );
 
-  const descEditorRef = useRef<import("@/components/common/rich-text-editor").RichTextEditorRef>(null);
+  const descEditorRef = useRef<ContentEditorRef>(null);
   const handleDescriptionUpload = useCallback(
     (file: File) => uploadWithToast(file, { issueId: id }),
     [uploadWithToast, id],
@@ -557,7 +558,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                         {issue.assignee_type === "member" && issue.assignee_id === m.user_id && <span className="ml-auto text-xs text-muted-foreground">✓</span>}
                       </DropdownMenuItem>
                     ))}
-                    {agents.filter((a) => canAssignAgent(a, user?.id, currentMemberRole)).map((a) => (
+                    {agents.filter((a) => !a.archived_at && canAssignAgent(a, user?.id, currentMemberRole)).map((a) => (
                       <DropdownMenuItem
                         key={a.id}
                         onClick={() => handleUpdateField({ assignee_type: "agent", assignee_id: a.id })}
@@ -690,7 +691,7 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
             }}
           />
 
-          <RichTextEditor
+          <ContentEditor
             ref={descEditorRef}
             key={id}
             defaultValue={issue.description || ""}
@@ -791,9 +792,9 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
                             })}
                           </CommandGroup>
                         )}
-                        {agents.length > 0 && (
+                        {agents.filter((a) => !a.archived_at).length > 0 && (
                           <CommandGroup heading="Agents">
-                            {agents.map((a) => {
+                            {agents.filter((a) => !a.archived_at).map((a) => {
                               const sub = subscribers.find((s) => s.user_type === "agent" && s.user_id === a.id);
                               const isSubbed = !!sub;
                               return (
@@ -820,12 +821,11 @@ export function IssueDetail({ issueId, onDelete, defaultSidebarOpen = true, layo
             </div>
 
             {/* Agent live output */}
-            <div className="mt-4">
-              <AgentLiveCard
-                issueId={id}
-                agentName={issue.assignee_type === "agent" && issue.assignee_id ? getActorName("agent", issue.assignee_id) : undefined}
-              />
-            </div>
+            <AgentLiveCard
+              issueId={id}
+              agentName={issue.assignee_type === "agent" && issue.assignee_id ? getActorName("agent", issue.assignee_id) : undefined}
+              scrollContainerRef={scrollContainerRef}
+            />
 
             {/* Agent execution history */}
             <div className="mt-3">
