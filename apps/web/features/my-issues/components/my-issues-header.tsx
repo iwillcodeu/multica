@@ -50,7 +50,7 @@ import {
 } from "@/features/issues/stores/view-store";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import type { Issue } from "@/shared/types";
-import { myIssuesViewStore, type MyIssuesScope } from "../stores/my-issues-view-store";
+import { myIssuesViewStore } from "../stores/my-issues-view-store";
 
 // ---------------------------------------------------------------------------
 // HoverCheck
@@ -103,16 +103,6 @@ function useIssueCounts(allIssues: Issue[]) {
 }
 
 // ---------------------------------------------------------------------------
-// Scope config
-// ---------------------------------------------------------------------------
-
-const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
-  { value: "assigned", label: "Assigned", description: "Issues assigned to me" },
-  { value: "created", label: "Created", description: "Issues I created" },
-  { value: "agents", label: "My Agents", description: "Issues assigned to my agents" },
-];
-
-// ---------------------------------------------------------------------------
 // MyIssuesHeader
 // ---------------------------------------------------------------------------
 
@@ -124,7 +114,6 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const sortBy = useStore(myIssuesViewStore, (s) => s.sortBy);
   const sortDirection = useStore(myIssuesViewStore, (s) => s.sortDirection);
   const cardProperties = useStore(myIssuesViewStore, (s) => s.cardProperties);
-  const scope = useStore(myIssuesViewStore, (s) => s.scope);
   const act = myIssuesViewStore.getState();
 
   const counts = useIssueCounts(allIssues);
@@ -137,30 +126,7 @@ export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
 
   return (
     <div className="flex h-12 shrink-0 items-center justify-between px-4">
-      {/* Left: scope buttons */}
-      <div className="flex items-center gap-1">
-        {SCOPES.map((s) => (
-          <Tooltip key={s.value}>
-            <TooltipTrigger
-              render={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className={
-                    scope === s.value
-                      ? "rounded-full border-transparent bg-selection-subtle text-selection-subtle-foreground hover:bg-selection-subtle/90 dark:bg-selection-subtle dark:hover:bg-selection-subtle/90"
-                      : "rounded-full border-transparent text-muted-foreground hover:bg-sidebar-item-hover hover:text-foreground dark:hover:bg-sidebar-item-hover"
-                  }
-                  onClick={() => act.setScope(s.value)}
-                >
-                  {s.label}
-                </Button>
-              }
-            />
-            <TooltipContent side="bottom">{s.description}</TooltipContent>
-          </Tooltip>
-        ))}
-      </div>
+      <span className="text-sm text-muted-foreground">Assigned to you</span>
 
       {/* Right: filter + display + view toggle */}
       <div className="flex items-center gap-1">

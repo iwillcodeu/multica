@@ -21,10 +21,9 @@ import { api } from "@/shared/api";
 import { myIssuesViewStore } from "../stores/my-issues-view-store";
 import { MyIssuesHeader } from "./my-issues-header";
 
-export function MyIssuesPage() {
+export function MyIssuesPage({ projectId }: { projectId: string | null }) {
   const user = useAuthStore((s) => s.user);
   const workspace = useWorkspaceStore((s) => s.workspace);
-  const agents = useWorkspaceStore((s) => s.agents);
   const allIssues = useIssueStore((s) => s.issues);
   const loading = useIssueStore((s) => s.loading);
 
@@ -32,7 +31,6 @@ export function MyIssuesPage() {
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
   const categoryFilters = useStore(myIssuesViewStore, (s) => s.categoryFilters);
-  const scope = useStore(myIssuesViewStore, (s) => s.scope);
 
   useEffect(() => {
     registerViewStoreForWorkspaceSync(myIssuesViewStore);
@@ -40,48 +38,17 @@ export function MyIssuesPage() {
 
   useEffect(() => {
     useIssueSelectionStore.getState().clear();
-  }, [viewMode, scope]);
+  }, [viewMode, projectId]);
 
-  const myAgentIds = useMemo(() => {
-    if (!user) return new Set<string>();
-    return new Set(
-      agents.filter((a) => a.owner_id === user.id).map((a) => a.id),
-    );
-  }, [agents, user]);
-
-  // Per-scope issue lists
-  const assignedToMe = useMemo(() => {
+  /** Assignee is the current workspace member only (not agents). */
+  const myIssues = useMemo(() => {
     if (!user) return [];
-    return allIssues.filter(
+    const assignedToMe = allIssues.filter(
       (i) => i.assignee_type === "member" && i.assignee_id === user.id,
     );
-  }, [allIssues, user]);
-
-  const myAgentIssues = useMemo(() => {
-    if (!user) return [];
-    return allIssues.filter(
-      (i) =>
-        i.assignee_type === "agent" &&
-        i.assignee_id &&
-        myAgentIds.has(i.assignee_id),
-    );
-  }, [allIssues, user, myAgentIds]);
-
-  const createdByMe = useMemo(() => {
-    if (!user) return [];
-    return allIssues.filter(
-      (i) => i.creator_type === "member" && i.creator_id === user.id,
-    );
-  }, [allIssues, user]);
-
-  const myIssues = useMemo(() => {
-    switch (scope) {
-      case "assigned": return assignedToMe;
-      case "agents": return myAgentIssues;
-      case "created": return createdByMe;
-      default: return assignedToMe;
-    }
-  }, [scope, assignedToMe, myAgentIssues, createdByMe]);
+    if (!projectId) return assignedToMe;
+    return assignedToMe.filter((i) => i.project_id === projectId);
+  }, [allIssues, user, projectId]);
 
   // Apply status/priority filters from view store
   const issues = useMemo(
@@ -181,12 +148,14 @@ export function MyIssuesPage() {
               visibleStatuses={visibleStatuses}
               hiddenStatuses={hiddenStatuses}
               onMoveIssue={handleMoveIssue}
+              projectId={projectId ?? undefined}
             />
           ) : (
             <ListView
               issues={issues}
               visibleStatuses={visibleStatuses}
               showProjectOnRows
+              projectId={projectId ?? undefined}
             />
           )}
         </div>

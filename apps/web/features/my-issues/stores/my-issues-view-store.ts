@@ -8,12 +8,7 @@ import {
   viewStorePersistOptions,
 } from "@/features/issues/stores/view-store";
 
-export type MyIssuesScope = "assigned" | "created" | "agents";
-
-export interface MyIssuesViewState extends IssueViewState {
-  scope: MyIssuesScope;
-  setScope: (scope: MyIssuesScope) => void;
-}
+export interface MyIssuesViewState extends IssueViewState {}
 
 const basePersist = viewStorePersistOptions("multica_my_issues_view");
 
@@ -21,14 +16,11 @@ export const myIssuesViewStore: StoreApi<MyIssuesViewState> = createStore<MyIssu
   persist(
     (set) => ({
       ...viewStoreSlice(set as unknown as StoreApi<IssueViewState>["setState"]),
-      scope: "assigned" as MyIssuesScope,
-      setScope: (scope: MyIssuesScope) => set({ scope }),
     }),
     {
       name: basePersist.name,
       partialize: (state: MyIssuesViewState) => ({
         ...basePersist.partialize(state),
-        scope: state.scope,
       }),
     },
   ),
