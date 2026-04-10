@@ -30,10 +30,10 @@ if [[ -z "$ENV_FILE" || ! -f "$ENV_FILE" ]]; then
 fi
 
 echo "==> Build env: ${ENV_FILE}"
-set -a
+# Load build env without `$VAR` expansion.
 # shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
+source "${ROOT}/scripts/deploy/dotenv-export.sh"
+dotenv_export "$ENV_FILE"
 
 export MULTICA_STANDALONE_DEPLOY=1
 export NEXT_TELEMETRY_DISABLED=1

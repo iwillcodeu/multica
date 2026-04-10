@@ -27,7 +27,8 @@ ssh "$HOST" "chmod +x ${REMOTE}/server/bin/server ${REMOTE}/server/bin/migrate"
 
 if [[ "${NO_MIGRATE:-0}" != "1" ]]; then
   echo "==> migrate up on ${HOST}"
-  ssh "$HOST" "set -a && source ${REMOTE}/.env && set +a && ${REMOTE}/server/bin/migrate up"
+  # migrate resolves migrations/ relative to cwd; must run from server/ (see server/cmd/migrate/main.go).
+  ssh "$HOST" "cd ${REMOTE}/server && source ${REMOTE}/scripts/deploy/dotenv-export.sh && dotenv_export ${REMOTE}/.env && ./bin/migrate up"
 else
   echo "==> Skipping migrate (NO_MIGRATE=1)"
 fi

@@ -62,10 +62,15 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins(),
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Workspace-ID", "X-Request-ID", "X-Agent-ID", "X-Task-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Workspace-ID", "X-Request-ID", "X-Agent-ID", "X-Task-ID", "X-Internal-Secret"},
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+
+	// DingTalk XiaoAn robot callback (public URL; signature verified in handler)
+	r.Get("/xiaoanmsg", h.XiaoanDingTalkPing)
+	r.Head("/xiaoanmsg", h.XiaoanDingTalkPing)
+	r.Post("/xiaoanmsg", h.XiaoanDingTalkCallback)
 
 	// Health check
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +90,14 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 	r.Post("/auth/login-password", h.LoginPassword)
 	// Same handler under /api/auth/* so Next.js can proxy only /api/* (see apps/web/app/api/auth/login-password/route.ts)
 	r.Post("/api/auth/login-password", h.LoginPassword)
+
+	// Internal API routes (server-to-server, shared secret)
+	r.Route("/api/internal", func(r chi.Router) {
+		r.Use(middleware.RequireInternalSecret)
+
+		// Create an issue as a specific user (creator resolved by email).
+		r.Post("/issues/as-user", h.CreateIssueAsUser)
+	})
 
 	// Daemon API routes (all require a valid token)
 	r.Route("/api/daemon", func(r chi.Router) {

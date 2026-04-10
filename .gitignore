@@ -17,6 +17,15 @@ dist-electron
 .env*
 !.env.example
 
+# IDE
+.idea/
+
+# local package manager caches
+.pnpm-store/
+
+# local dev certs
+tmp-cert/
+
 # test coverage
 coverage
 

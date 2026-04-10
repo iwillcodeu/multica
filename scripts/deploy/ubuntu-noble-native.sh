@@ -136,8 +136,10 @@ MULTICA_SERVER_NAME="${MULTICA_SERVER_NAME:-pmo.atuofuture.com 47.103.102.65}"
 DB_PASS=""
 if [[ -f "${DEPLOY_DIR}/.env" ]]; then
   log "Loading existing ${DEPLOY_DIR}/.env"
+  # Load env without `$VAR` expansion.
   # shellcheck disable=SC1090
-  set -a && source "${DEPLOY_DIR}/.env" && set +a
+  source "${DEPLOY_DIR}/scripts/deploy/dotenv-export.sh"
+  dotenv_export "${DEPLOY_DIR}/.env"
   DB_PASS="${POSTGRES_PASSWORD:-}"
 fi
 
@@ -179,8 +181,10 @@ else
   log "Keeping ${DEPLOY_DIR}/.env (sync DATABASE_URL with Postgres if you changed DB_PASS)"
 fi
 
+# Load env without `$VAR` expansion.
 # shellcheck disable=SC1090
-set -a && source "${DEPLOY_DIR}/.env" && set +a
+source "${DEPLOY_DIR}/scripts/deploy/dotenv-export.sh"
+dotenv_export "${DEPLOY_DIR}/.env"
 DB_PASS="${POSTGRES_PASSWORD:-$DB_PASS}"
 if [[ -z "$DB_PASS" ]]; then
   echo "POSTGRES_PASSWORD missing in .env" >&2

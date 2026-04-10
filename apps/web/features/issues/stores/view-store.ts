@@ -26,7 +26,7 @@ export const SORT_OPTIONS: { value: SortField; label: string }[] = [
   { value: "position", label: "Manual" },
   { value: "priority", label: "Priority" },
   { value: "due_date", label: "Due date" },
-  { value: "created_at", label: "Created date" },
+  { value: "created_at", label: "Created Time" },
   { value: "title", label: "Title" },
 ];
 

@@ -4,20 +4,21 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export NODE_ENV=production
 export NEXT_TELEMETRY_DISABLED=1
 DEPLOY="__DEPLOY_DIR__"
+
+# systemd already loads /opt/multica/.env via EnvironmentFile=.
+# This loader is a safe fallback for manual runs and avoids `$VAR` expansion.
+if [[ -f "$DEPLOY/scripts/deploy/dotenv-export.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "$DEPLOY/scripts/deploy/dotenv-export.sh"
+  dotenv_export "$DEPLOY/.env" || true
+fi
+
 if [[ -f "$DEPLOY/apps/web/.next/standalone/apps/web/server.js" ]]; then
   cd "$DEPLOY/apps/web/.next/standalone"
-  set -a
-  # shellcheck disable=SC1090
-  source "$DEPLOY/.env"
-  set +a
   export HOSTNAME=127.0.0.1
   export PORT="${FRONTEND_PORT:-3000}"
   exec node apps/web/server.js
 else
   cd "$DEPLOY"
-  set -a
-  # shellcheck disable=SC1090
-  source "$DEPLOY/.env"
-  set +a
   exec pnpm --filter @multica/web start -- -H 127.0.0.1 -p "${FRONTEND_PORT:-3000}"
 fi
