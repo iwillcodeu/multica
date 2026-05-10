@@ -2,19 +2,30 @@ package handler
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+// extContentTypes overrides http.DetectContentType for extensions it gets wrong.
+// Go's sniffer returns text/xml for SVG, text/plain for CSS/JS, etc.
+var extContentTypes = map[string]string{
+	".svg":  "image/svg+xml",
+	".css":  "text/css",
+	".js":   "application/javascript",
+	".mjs":  "application/javascript",
+	".json": "application/json",
+	".wasm": "application/wasm",
+}
 
 const maxUploadSize = 100 << 20 // 100 MB
 
@@ -69,7 +80,11 @@ func (h *Handler) groupAttachments(r *http.Request, commentIDs []pgtype.UUID) ma
 	if len(commentIDs) == 0 {
 		return nil
 	}
-	attachments, err := h.Queries.ListAttachmentsByCommentIDs(r.Context(), commentIDs)
+	workspaceID := h.resolveWorkspaceID(r)
+	attachments, err := h.Queries.ListAttachmentsByCommentIDs(r.Context(), db.ListAttachmentsByCommentIDsParams{
+		Column1:     commentIDs,
+		WorkspaceID: parseUUID(workspaceID),
+	})
 	if err != nil {
 		slog.Error("failed to load attachments for comments", "error", err)
 		return nil
@@ -97,7 +112,7 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
@@ -122,6 +137,10 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentType := http.DetectContentType(buf[:n])
+	// Override with extension-based type when the sniffer gets it wrong.
+	if ct, ok := extContentTypes[strings.ToLower(path.Ext(header.Filename))]; ok {
+		contentType = ct
+	}
 	// Seek back so the full file is uploaded.
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read file")
@@ -134,42 +153,75 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		slog.Error("failed to generate file key", "error", err)
+	// Generate a UUIDv7 to use as both the attachment ID and S3 key.
+	id, err := uuid.NewV7()
+	if err != nil {
+		slog.Error("failed to generate uuid", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	key := hex.EncodeToString(b) + path.Ext(header.Filename)
-
-	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
-	if err != nil {
-		slog.Error("file upload failed", "error", err)
-		writeError(w, http.StatusInternalServerError, "upload failed")
-		return
+	filename := id.String() + path.Ext(header.Filename)
+	var key string
+	if workspaceID != "" {
+		key = "workspaces/" + workspaceID + "/" + filename
+	} else {
+		key = "users/" + userID + "/" + filename
 	}
 
-	// If workspace context is available, create an attachment record.
+	// If workspace context is available, validate membership before uploading.
 	if workspaceID != "" {
+		if _, err := h.getWorkspaceMember(r.Context(), userID, workspaceID); err != nil {
+			writeError(w, http.StatusForbidden, "not a member of this workspace")
+			return
+		}
+
 		uploaderType, uploaderID := h.resolveActor(r, userID, workspaceID)
 
 		params := db.CreateAttachmentParams{
+			ID:           pgtype.UUID{Bytes: id, Valid: true},
 			WorkspaceID:  parseUUID(workspaceID),
 			UploaderType: uploaderType,
 			UploaderID:   parseUUID(uploaderID),
 			Filename:     header.Filename,
-			Url:          link,
 			ContentType:  contentType,
 			SizeBytes:    int64(len(data)),
 		}
 
-		// Optional issue_id / comment_id from form fields
 		if issueID := r.FormValue("issue_id"); issueID != "" {
-			params.IssueID = parseUUID(issueID)
+			issueUUID, ok := parseUUIDOrBadRequest(w, issueID, "issue_id")
+			if !ok {
+				return
+			}
+			issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+				ID:          issueUUID,
+				WorkspaceID: parseUUID(workspaceID),
+			})
+			if err != nil {
+				writeError(w, http.StatusForbidden, "invalid issue_id")
+				return
+			}
+			params.IssueID = issue.ID
 		}
 		if commentID := r.FormValue("comment_id"); commentID != "" {
-			params.CommentID = parseUUID(commentID)
+			commentUUID, ok := parseUUIDOrBadRequest(w, commentID, "comment_id")
+			if !ok {
+				return
+			}
+			comment, err := h.Queries.GetComment(r.Context(), commentUUID)
+			if err != nil || uuidToString(comment.WorkspaceID) != workspaceID {
+				writeError(w, http.StatusForbidden, "invalid comment_id")
+				return
+			}
+			params.CommentID = comment.ID
 		}
+
+		link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
+		if err != nil {
+			slog.Error("file upload failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "upload failed")
+			return
+		}
+		params.Url = link
 
 		att, err := h.Queries.CreateAttachment(r.Context(), params)
 		if err != nil {
@@ -180,12 +232,26 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, h.attachmentToResponse(att))
 			return
 		}
+
+		writeJSON(w, http.StatusOK, map[string]string{
+			"id":       "",
+			"url":      link,
+			"filename": header.Filename,
+		})
+		return
 	}
 
-	// Fallback response (no workspace context, e.g. avatar upload)
+	// No workspace context (e.g. avatar upload) — upload directly.
+	link, err := h.Storage.Upload(r.Context(), key, data, contentType, header.Filename)
+	if err != nil {
+		slog.Error("file upload failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "upload failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{
+		"id":       id.String(),
+		"url":      link,
 		"filename": header.Filename,
-		"link":     link,
 	})
 }
 
@@ -223,15 +289,24 @@ func (h *Handler) ListAttachments(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) GetAttachmentByID(w http.ResponseWriter, r *http.Request) {
 	attachmentID := chi.URLParam(r, "id")
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
 
+	attUUID, ok := parseUUIDOrBadRequest(w, attachmentID, "attachment id")
+	if !ok {
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+
 	att, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{
-		ID:          parseUUID(attachmentID),
-		WorkspaceID: parseUUID(workspaceID),
+		ID:          attUUID,
+		WorkspaceID: wsUUID,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
@@ -247,7 +322,7 @@ func (h *Handler) GetAttachmentByID(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 	attachmentID := chi.URLParam(r, "id")
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 	if workspaceID == "" {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
@@ -258,9 +333,18 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	attUUID, ok := parseUUIDOrBadRequest(w, attachmentID, "attachment id")
+	if !ok {
+		return
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace id")
+	if !ok {
+		return
+	}
+
 	att, err := h.Queries.GetAttachment(r.Context(), db.GetAttachmentParams{
-		ID:          parseUUID(attachmentID),
-		WorkspaceID: parseUUID(workspaceID),
+		ID:          attUUID,
+		WorkspaceID: wsUUID,
 	})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "attachment not found")
@@ -295,17 +379,25 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 // Attachment linking
 // ---------------------------------------------------------------------------
 
+// linkAttachmentsByIssueIDs links the given attachment IDs to an issue.
+// Only updates attachments that have no issue_id yet.
+func (h *Handler) linkAttachmentsByIssueIDs(ctx context.Context, issueID, workspaceID pgtype.UUID, ids []pgtype.UUID) {
+	if err := h.Queries.LinkAttachmentsToIssue(ctx, db.LinkAttachmentsToIssueParams{
+		IssueID:     issueID,
+		WorkspaceID: workspaceID,
+		Column3:     ids,
+	}); err != nil {
+		slog.Error("failed to link attachments to issue", "error", err)
+	}
+}
+
 // linkAttachmentsByIDs links the given attachment IDs to a comment.
 // Only updates attachments that belong to the same issue and have no comment_id yet.
-func (h *Handler) linkAttachmentsByIDs(ctx context.Context, commentID, issueID pgtype.UUID, ids []string) {
-	uuids := make([]pgtype.UUID, len(ids))
-	for i, id := range ids {
-		uuids[i] = parseUUID(id)
-	}
+func (h *Handler) linkAttachmentsByIDs(ctx context.Context, commentID, issueID pgtype.UUID, ids []pgtype.UUID) {
 	if err := h.Queries.LinkAttachmentsToComment(ctx, db.LinkAttachmentsToCommentParams{
 		CommentID: commentID,
 		IssueID:   issueID,
-		Column3:   uuids,
+		Column3:   ids,
 	}); err != nil {
 		slog.Error("failed to link attachments to comment", "error", err)
 	}

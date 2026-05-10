@@ -22,15 +22,7 @@ import (
 
 var authCmd = &cobra.Command{
 	Use:   "auth",
-	Short: "Manage authentication",
-}
-
-var authLoginCmd = &cobra.Command{
-	Use:    "login",
-	Short:  "Authenticate with Multica",
-	Long:   "Authenticate with Multica without auto-configuring workspaces. Use 'multica login' for the guided setup flow.",
-	Hidden: true,
-	RunE:   runAuthLogin,
+	Short: "Authenticate multica with Multica",
 }
 
 var authStatusCmd = &cobra.Command{
@@ -45,9 +37,12 @@ var authLogoutCmd = &cobra.Command{
 	RunE:  runAuthLogout,
 }
 
+// callbackHostFlag lets users override the host/IP that goes into the OAuth
+// cli_callback URL. Useful when the CLI sits behind a reverse proxy or the
+// auto-detected LAN IP isn't the one the browser can reach.
+const callbackHostFlag = "callback-host"
+
 func init() {
-	authLoginCmd.Flags().Bool("token", false, "Authenticate by pasting a personal access token")
-	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authLogoutCmd)
 }
@@ -72,7 +67,9 @@ func resolveAppURL(cmd *cobra.Command) string {
 	if err == nil && cfg.AppURL != "" {
 		return strings.TrimRight(cfg.AppURL, "/")
 	}
-	return "https://multica.ai"
+	fmt.Fprintln(os.Stderr, "No app URL configured. Run 'multica setup' first.")
+	os.Exit(1)
+	return "" // unreachable
 }
 
 func openBrowser(url string) error {
@@ -86,35 +83,144 @@ func openBrowser(url string) error {
 		cmd = "xdg-open"
 		args = []string{url}
 	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start", url}
+		cmd = "rundll32"
+		args = []string{"url.dll,FileProtocolHandler", url}
 	default:
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 	return exec.Command(cmd, args...).Start()
 }
 
-func runAuthLogin(cmd *cobra.Command, _ []string) error {
-	useToken, _ := cmd.Flags().GetBool("token")
-	if useToken {
-		return runAuthLoginToken(cmd)
+func runAuthLogin(cmd *cobra.Command, args []string) error {
+	if cmd.Flags().Changed("token") {
+		tokenFlag, _ := cmd.Flags().GetString("token")
+		// `--token mul_xxx` (space form) is what users actually type — that's
+		// the form from the docs and from #1994. NoOptDefVal prevents pflag
+		// from consuming the next arg as the flag value, so it lands here as
+		// a positional. Promote it to the token value.
+		if tokenFlag == tokenPromptSentinel && len(args) == 1 {
+			tokenFlag = args[0]
+		}
+		return runAuthLoginToken(cmd, tokenFlag)
 	}
 	return runAuthLoginBrowser(cmd)
+}
+
+// resolveCallbackBinding picks the host that goes into the `cli_callback`
+// URL and the interface the CLI should bind its local HTTP listener to.
+//
+// The browser running the login flow is on the *server's* machine (or
+// wherever the user clicked the link), not on the CLI host. That means the
+// callback URL must resolve to an address the browser can actually reach,
+// which is different in each topology:
+//
+//   - hosted / public app URL: browser and CLI are on the same machine,
+//     localhost works.
+//   - self-host, CLI on server box: same as above.
+//   - self-host, CLI on a different LAN box: the callback URL must point at
+//     the CLI's own LAN IP, not the server's.
+//   - reverse-proxied / FQDN setups: auto-detection can't know the right
+//     host — the user supplies it via --callback-host.
+//
+// detectOutbound is injected so tests can exercise the routing decisions
+// without real network calls.
+func resolveCallbackBinding(flagHost, serverURL, appURL string, detectOutbound func(string) net.IP) (callbackHost, bindAddr string) {
+	// Explicit flag always wins. Bind on all interfaces so the browser can
+	// reach us regardless of which interface the host name resolves to.
+	if h := strings.TrimSpace(flagHost); h != "" {
+		return h, "0.0.0.0"
+	}
+
+	appIP := urlPrivateIP(appURL)
+	if appIP == nil {
+		// Public hostname, FQDN without private-IP mapping, or parse error.
+		// Loopback is the only safe default — on hosted/public setups the
+		// browser and CLI live on the same machine.
+		return "localhost", "127.0.0.1"
+	}
+
+	// app_url is a private LAN IP. Figure out whether the CLI is on that
+	// same box or a different one by asking the kernel which local address
+	// it would use to reach the server. Same box → loopback is fine.
+	// Different box → use the CLI's outbound IP so the browser can reach us.
+	cliIP := detectOutbound(serverURL)
+	if cliIP == nil {
+		// Detection failed (offline, unreachable server, etc.). Fall back to
+		// the app IP — preserves the pre-existing same-machine behaviour.
+		return appIP.String(), "0.0.0.0"
+	}
+	if cliIP.Equal(appIP) {
+		return "localhost", "127.0.0.1"
+	}
+	return cliIP.String(), "0.0.0.0"
+}
+
+// urlPrivateIP returns the hostname of rawURL parsed as an RFC 1918 IP, or
+// nil if the URL is unparsable or the host is not a private literal.
+func urlPrivateIP(rawURL string) net.IP {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	if ip == nil || !ip.IsPrivate() {
+		return nil
+	}
+	return ip
+}
+
+// detectOutboundIP returns the local IPv4 address the OS would use to reach
+// serverURL, or nil if detection fails. The UDP dial does not send packets —
+// it just causes the kernel to pick a source IP for the destination route.
+func detectOutboundIP(serverURL string) net.IP {
+	parsed, err := url.Parse(serverURL)
+	if err != nil || parsed.Hostname() == "" {
+		return nil
+	}
+	port := parsed.Port()
+	if port == "" {
+		if parsed.Scheme == "https" {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	conn, err := net.Dial("udp4", net.JoinHostPort(parsed.Hostname(), port))
+	if err != nil {
+		return nil
+	}
+	defer conn.Close()
+	local, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || local.IP == nil {
+		return nil
+	}
+	// Normalise to 4-byte form so Equal() comparisons match net.ParseIP
+	// output consistently.
+	if v4 := local.IP.To4(); v4 != nil {
+		return v4
+	}
+	return local.IP
 }
 
 func runAuthLoginBrowser(cmd *cobra.Command) error {
 	serverURL := resolveServerURL(cmd)
 	appURL := resolveAppURL(cmd)
 
-	// Start a local HTTP server on a random port to receive the callback.
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	flagHost, _ := cmd.Flags().GetString(callbackHostFlag)
+	callbackHost, bindAddr := resolveCallbackBinding(flagHost, serverURL, appURL, detectOutboundIP)
+
+	// Pin to "tcp4" — a bare "tcp" on macOS can produce an IPv6-only socket
+	// that IPv4 clients (including browsers resolving localhost → 127.0.0.1)
+	// cannot reach. The callback URL is always an IPv4 literal or hostname,
+	// so an IPv4 listener is what the browser actually needs.
+	listener, err := net.Listen("tcp4", bindAddr+":0")
 	if err != nil {
 		return fmt.Errorf("failed to start local server: %w", err)
 	}
 	defer listener.Close()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	callbackURL := fmt.Sprintf("http://localhost:%d/callback", port)
+	callbackURL := fmt.Sprintf("http://%s:%d/callback", callbackHost, port)
 
 	// Generate a random state parameter for CSRF protection.
 	stateBytes := make([]byte, 16)
@@ -210,7 +316,6 @@ func runAuthLoginBrowser(cmd *cobra.Command) error {
 	profile := resolveProfile(cmd)
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
 	cfg.WorkspaceID = ""
-	cfg.WatchedWorkspaces = nil
 	cfg.Token = patResp.Token
 	cfg.ServerURL = serverURL
 	cfg.AppURL = appURL
@@ -222,13 +327,22 @@ func runAuthLoginBrowser(cmd *cobra.Command) error {
 	return nil
 }
 
-func runAuthLoginToken(cmd *cobra.Command) error {
-	fmt.Print("Enter your personal access token: ")
-	scanner := bufio.NewScanner(os.Stdin)
-	if !scanner.Scan() {
-		return fmt.Errorf("no input")
+func runAuthLoginToken(cmd *cobra.Command, providedToken string) error {
+	// The prompt sentinel is what pflag substitutes for `--token` with no
+	// value (see loginCmd init); treat it the same as an empty string so we
+	// fall through to the interactive prompt.
+	if providedToken == tokenPromptSentinel {
+		providedToken = ""
 	}
-	token := strings.TrimSpace(scanner.Text())
+	token := strings.TrimSpace(providedToken)
+	if token == "" {
+		fmt.Print("Enter your personal access token: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if !scanner.Scan() {
+			return fmt.Errorf("no input")
+		}
+		token = strings.TrimSpace(scanner.Text())
+	}
 	if token == "" {
 		return fmt.Errorf("token is required")
 	}
@@ -253,7 +367,6 @@ func runAuthLoginToken(cmd *cobra.Command) error {
 	profile := resolveProfile(cmd)
 	cfg, _ := cli.LoadCLIConfigForProfile(profile)
 	cfg.WorkspaceID = ""
-	cfg.WatchedWorkspaces = nil
 	cfg.Token = token
 	cfg.ServerURL = serverURL
 	if err := cli.SaveCLIConfigForProfile(cfg, profile); err != nil {

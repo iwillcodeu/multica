@@ -1,11 +1,12 @@
 package handler
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -206,11 +207,58 @@ func TestIsReplyToMemberThread(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := h.isReplyToMemberThread(tt.parent, tt.content, issue)
+			got := h.isReplyToMemberThread(context.Background(), tt.parent, tt.content, issue)
 			if got != tt.want {
 				t.Errorf("isReplyToMemberThread() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// -------------------------------------------------------------------
+// shouldInheritParentMentions
+// -------------------------------------------------------------------
+
+func TestShouldInheritParentMentions(t *testing.T) {
+	memberParent := &db.Comment{AuthorType: "member", AuthorID: testUUID(memberID), Content: "thread starter"}
+	agentParent := &db.Comment{AuthorType: "agent", AuthorID: testUUID(agentAssigneeID), Content: "agent thread starter"}
+	someMention := []util.Mention{{Type: "agent", ID: otherAgentID}}
+
+	tests := []struct {
+		name            string
+		parent          *db.Comment
+		replyMentions   []util.Mention
+		replyAuthorType string
+		want            bool
+	}{
+		{"nil parent → false", nil, nil, "member", false},
+		{"reply has explicit mentions → false", memberParent, someMention, "member", false},
+		{"agent-authored reply, member parent → false (loop guard)", memberParent, nil, "agent", false},
+		{"member reply, agent parent → false (parent author guard)", agentParent, nil, "member", false},
+		{"member reply, member parent, no mentions → true (intended use)", memberParent, nil, "member", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldInheritParentMentions(tt.parent, tt.replyMentions, tt.replyAuthorType)
+			if got != tt.want {
+				t.Errorf("shouldInheritParentMentions() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// Regression for the case from MUL-1535: J posts a PR completion comment
+// that @mentions GPT-Boy for review; later a member posts a plain follow-up
+// reply asking the assignee a question. GPT-Boy must NOT be re-triggered.
+func TestShouldInheritParentMentions_AgentReviewDelegationDoesNotLeak(t *testing.T) {
+	jPRCompletion := &db.Comment{
+		AuthorType: "agent",
+		AuthorID:   testUUID(agentAssigneeID),
+		Content:    fmt.Sprintf("PR ready. [@GPT-Boy](mention://agent/%s) please review this.", otherAgentID),
+	}
+	if got := shouldInheritParentMentions(jPRCompletion, nil, "member"); got {
+		t.Fatal("member follow-up to an agent's PR-review delegation must not inherit the @reviewer mention")
 	}
 }
 
@@ -234,7 +282,7 @@ func TestOnCommentTriggerDecision(t *testing.T) {
 	//   !commentMentionsOthersButNotAssignee && !isReplyToMemberThread
 	shouldTrigger := func(parent *db.Comment, content string) bool {
 		return !h.commentMentionsOthersButNotAssignee(content, issue) &&
-			!h.isReplyToMemberThread(parent, content, issue)
+			!h.isReplyToMemberThread(context.Background(), parent, content, issue)
 	}
 
 	tests := []struct {
@@ -266,121 +314,4 @@ func TestOnCommentTriggerDecision(t *testing.T) {
 			}
 		})
 	}
-}
-
-// -------------------------------------------------------------------
-// agentHasTriggerEnabled
-// -------------------------------------------------------------------
-
-func TestAgentHasTriggerEnabled(t *testing.T) {
-	tests := []struct {
-		name        string
-		raw         []byte
-		triggerType string
-		want        bool
-	}{
-		{
-			name:        "nil triggers → enabled (backwards compat)",
-			raw:         nil,
-			triggerType: "on_comment",
-			want:        true,
-		},
-		{
-			name:        "empty byte slice → enabled",
-			raw:         []byte{},
-			triggerType: "on_comment",
-			want:        true,
-		},
-		{
-			name:        "empty JSON array → enabled (backwards compat)",
-			raw:         []byte("[]"),
-			triggerType: "on_comment",
-			want:        true,
-		},
-		{
-			name:        "on_comment explicitly enabled",
-			raw:         mustJSON([]agentTriggerSnapshot{{Type: "on_comment", Enabled: true}}),
-			triggerType: "on_comment",
-			want:        true,
-		},
-		{
-			name:        "on_comment explicitly disabled",
-			raw:         mustJSON([]agentTriggerSnapshot{{Type: "on_comment", Enabled: false}}),
-			triggerType: "on_comment",
-			want:        false,
-		},
-		{
-			name:        "on_mention not configured but others are → enabled by default",
-			raw:         mustJSON([]agentTriggerSnapshot{{Type: "on_comment", Enabled: true}}),
-			triggerType: "on_mention",
-			want:        true,
-		},
-		{
-			name:        "invalid JSON → disabled (fail safe)",
-			raw:         []byte("{bad json"),
-			triggerType: "on_comment",
-			want:        false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := agentHasTriggerEnabled(tt.raw, tt.triggerType)
-			if got != tt.want {
-				t.Errorf("agentHasTriggerEnabled() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// -------------------------------------------------------------------
-// defaultAgentTriggers
-// -------------------------------------------------------------------
-
-func TestDefaultAgentTriggers(t *testing.T) {
-	raw := defaultAgentTriggers()
-
-	var triggers []agentTriggerSnapshot
-	if err := json.Unmarshal(raw, &triggers); err != nil {
-		t.Fatalf("failed to unmarshal default triggers: %v", err)
-	}
-
-	if len(triggers) != 3 {
-		t.Fatalf("expected 3 default triggers, got %d", len(triggers))
-	}
-
-	expected := map[string]bool{
-		"on_assign":  true,
-		"on_comment": true,
-		"on_mention": true,
-	}
-	for _, tr := range triggers {
-		want, ok := expected[tr.Type]
-		if !ok {
-			t.Errorf("unexpected trigger type: %s", tr.Type)
-			continue
-		}
-		if tr.Enabled != want {
-			t.Errorf("trigger %s: enabled = %v, want %v", tr.Type, tr.Enabled, want)
-		}
-		delete(expected, tr.Type)
-	}
-	for typ := range expected {
-		t.Errorf("missing trigger type: %s", typ)
-	}
-
-	// Verify all triggers are enabled via agentHasTriggerEnabled
-	for _, typ := range []string{"on_assign", "on_comment", "on_mention"} {
-		if !agentHasTriggerEnabled(raw, typ) {
-			t.Errorf("agentHasTriggerEnabled(default, %q) = false, want true", typ)
-		}
-	}
-}
-
-func mustJSON(v any) []byte {
-	b, err := json.Marshal(v)
-	if err != nil {
-		panic(err)
-	}
-	return b
 }

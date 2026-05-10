@@ -11,7 +11,7 @@ import (
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Show CLI configuration",
+	Short: "Manage configuration for multica",
 	RunE:  runConfigShow,
 }
 
@@ -25,7 +25,7 @@ var configSetCmd = &cobra.Command{
 	Use:   "set <key> <value>",
 	Short: "Set a CLI configuration value",
 	Long:  "Supported keys: server_url, app_url, workspace_id",
-	Args:  cobra.ExactArgs(2),
+	Args:  exactArgs(2),
 	RunE:  runConfigSet,
 }
 
@@ -79,6 +79,7 @@ func runConfigSet(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Set %s = %s\n", key, value)
 	return nil
 }
+
 
 func valueOrDefault(v, fallback string) string {
 	if v == "" {

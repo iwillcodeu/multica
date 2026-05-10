@@ -1,24 +1,35 @@
--- name: ListProjectsByWorkspace :many
+-- name: ListProjects :many
 SELECT * FROM project
 WHERE workspace_id = $1
-ORDER BY position ASC, created_at ASC;
+  AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
+  AND (sqlc.narg('priority')::text IS NULL OR priority = sqlc.narg('priority'))
+ORDER BY created_at DESC;
 
 -- name: GetProject :one
-SELECT * FROM project WHERE id = $1;
+SELECT * FROM project
+WHERE id = $1;
 
 -- name: GetProjectInWorkspace :one
 SELECT * FROM project
 WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateProject :one
-INSERT INTO project (workspace_id, name, position)
-VALUES ($1, $2, $3)
-RETURNING *;
+INSERT INTO project (
+    workspace_id, title, description, icon, status,
+    lead_type, lead_id, priority
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8
+) RETURNING *;
 
 -- name: UpdateProject :one
 UPDATE project SET
-    name = COALESCE(sqlc.narg('name'), name),
-    position = COALESCE(sqlc.narg('position'), position),
+    title = COALESCE(sqlc.narg('title'), title),
+    description = sqlc.narg('description'),
+    icon = sqlc.narg('icon'),
+    status = COALESCE(sqlc.narg('status'), status),
+    priority = COALESCE(sqlc.narg('priority'), priority),
+    lead_type = sqlc.narg('lead_type'),
+    lead_id = sqlc.narg('lead_id'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -27,10 +38,13 @@ RETURNING *;
 DELETE FROM project WHERE id = $1;
 
 -- name: CountIssuesByProject :one
-SELECT count(*)::int4 FROM issue WHERE project_id = $1;
+SELECT count(*) FROM issue
+WHERE project_id = $1;
 
--- name: GetFirstProjectInWorkspace :one
-SELECT * FROM project
-WHERE workspace_id = $1
-ORDER BY position ASC, created_at ASC
-LIMIT 1;
+-- name: GetProjectIssueStats :many
+SELECT project_id,
+       count(*)::bigint AS total_count,
+       count(*) FILTER (WHERE status IN ('done', 'cancelled'))::bigint AS done_count
+FROM issue
+WHERE project_id = ANY(sqlc.arg('project_ids')::uuid[])
+GROUP BY project_id;

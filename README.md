@@ -14,14 +14,13 @@
 
 **Your next 10 hires won't be human.**
 
-Open-source platform that turns coding agents into real teammates.<br/>
-Assign tasks, track progress, compound skills — manage your human + agent workforce in one place.
+The open-source managed agents platform.<br/>
+Turn coding agents into real teammates — assign tasks, track progress, compound skills.
 
 [![CI](https://github.com/multica-ai/multica/actions/workflows/ci.yml/badge.svg)](https://github.com/multica-ai/multica/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![GitHub stars](https://img.shields.io/github/stars/multica-ai/multica?style=flat)](https://github.com/multica-ai/multica/stargazers)
 
-[Website](https://multica.ai) · [Cloud](https://multica.ai/app) · [Self-Hosting](SELF_HOSTING.md) · [Contributing](CONTRIBUTING.md)
+[Website](https://multica.ai) · [Cloud](https://multica.ai/app) · [X](https://x.com/MulticaAI) · [Self-Hosting](SELF_HOSTING.md) · [Contributing](CONTRIBUTING.md)
 
 **English | [简体中文](README.zh-CN.md)**
 
@@ -31,13 +30,27 @@ Assign tasks, track progress, compound skills — manage your human + agent work
 
 Multica turns coding agents into real teammates. Assign issues to an agent like you'd assign to a colleague — they'll pick up the work, write code, report blockers, and update statuses autonomously.
 
-No more copy-pasting prompts. No more babysitting runs. Your agents show up on the board, participate in conversations, and compound reusable skills over time. Works with **Claude Code** and **Codex**.
+No more copy-pasting prompts. No more babysitting runs. Your agents show up on the board, participate in conversations, and compound reusable skills over time. Think of it as open-source infrastructure for managed agents — vendor-neutral, self-hosted, and designed for human + AI teams. Works with **Claude Code**, **Codex**, **GitHub Copilot CLI**, **OpenClaw**, **OpenCode**, **Hermes**, **Gemini**, **Pi**, **Cursor Agent**, **Kimi**, and **Kiro CLI**.
 
 <p align="center">
   <img src="docs/assets/hero-screenshot.png" alt="Multica board view" width="800">
 </p>
 
+## Why "Multica"?
+
+Multica — **Mul**tiplexed **I**nformation and **C**omputing **A**gent.
+
+The name is a nod to Multics, the pioneering operating system of the 1960s that introduced time-sharing — letting multiple users share a single machine as if each had it to themselves. Unix was born as a deliberate simplification of Multics: one user, one task, one elegant philosophy.
+
+We think the same inflection is happening again. For decades, software teams have been single-threaded — one engineer, one task, one context switch at a time. AI agents change that equation. Multica brings time-sharing back, but for an era where the "users" multiplexing the system are both humans and autonomous agents.
+
+In Multica, agents are first-class teammates. They get assigned issues, report progress, raise blockers, and ship code — just like their human colleagues. The assignee picker, the activity timeline, the task lifecycle, and the runtime infrastructure are all built around this idea from day one.
+
+Like Multics before it, the bet is on multiplexing: a small team shouldn't feel small. With the right system, two engineers and a fleet of agents can move like twenty.
+
 ## Features
+
+Multica manages the full agent lifecycle: from task assignment to execution monitoring to skill reuse.
 
 - **Agents as Teammates** — assign to an agent like you'd assign to a colleague. They have profiles, show up on the board, post comments, create issues, and report blockers proactively.
 - **Autonomous Execution** — set it and forget it. Full task lifecycle management (enqueue, claim, start, complete/fail) with real-time progress streaming via WebSocket.
@@ -45,82 +58,59 @@ No more copy-pasting prompts. No more babysitting runs. Your agents show up on t
 - **Unified Runtimes** — one dashboard for all your compute. Local daemons and cloud runtimes, auto-detection of available CLIs, real-time monitoring.
 - **Multi-Workspace** — organize work across teams with workspace-level isolation. Each workspace has its own agents, issues, and settings.
 
+---
+
+## Quick Install
+
+### macOS / Linux (Homebrew - recommended)
+
+```bash
+brew install multica-ai/tap/multica
+```
+
+Use `brew upgrade multica-ai/tap/multica` to keep the CLI current.
+
+### macOS / Linux (install script)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash
+```
+
+Use this if Homebrew is not available. The script installs the Multica CLI on macOS and Linux by using Homebrew when it is on `PATH`, otherwise it downloads the binary directly.
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.ps1 | iex
+```
+
+Then configure, authenticate, and start the daemon in one command:
+
+```bash
+multica setup          # Connect to Multica Cloud, log in, start daemon
+```
+
+> **Self-hosting?** Add `--with-server` to deploy a full Multica server on your machine:
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash -s -- --with-server
+> multica setup self-host
+> ```
+>
+> This pulls the official Multica images from GHCR (latest stable by default). Requires Docker. See the [Self-Hosting Guide](SELF_HOSTING.md) for details.
+> If the selected GHCR tag has not been published yet, fall back to `make selfhost-build` from a checkout.
+
+---
+
 ## Getting Started
 
-### Multica Cloud
-
-The fastest way to get started — no setup required: **[multica.ai](https://multica.ai)**
-
-More detail: [SELF_HOSTING.md](SELF_HOSTING.md), [AGENTS.md](AGENTS.md). Deployment is split into **three** flows; each has dedicated scripts under `scripts/deploy/`.
-
-#### 1. Docker deployment
-
-Docker runs PostgreSQL; this machine runs the Go API and Next dev server (frontend hot reload).
+### 1. Set up and start the daemon
 
 ```bash
-cp .env.example .env   # set JWT_SECRET etc.
-./scripts/deploy/deploy-docker.sh
-# equivalent: make deploy-docker
+multica setup           # Configure, authenticate, and start the daemon
 ```
 
-Requires: Docker, Go, pnpm, `.env`.
-
-#### 2. Local deployment (e.g. Mac + Homebrew Postgres)
-
-Use **two terminals**: backend first, then frontend.
-
-- **2.1 Frontend** — `pnpm install`, production `pnpm build`, `next start` on `127.0.0.1`: `./scripts/deploy/deploy-local-frontend.sh` (or `make deploy-local-frontend`).
-- **2.2 Backend** — DB check, `migrate up`, `go build`, run `./bin/server`: `./scripts/deploy/deploy-local-backend.sh` (or `make deploy-local-backend`).
-
-Configure `.env` (`DATABASE_URL`, `JWT_SECRET`). If Postgres is only reachable via Docker on this Mac, run backend with `SKIP_LOCAL_PG_CHECK=1 ./scripts/deploy/deploy-local-backend.sh`.
-
-#### 3. Remote deployment (Ubuntu, e.g. `chandao`)
-
-**First time on the server (as root):** install tree under `/opt/multica` (do **not** copy your laptop `.env` over production). Free port 80 if needed: `./scripts/deploy/disable-docker-on-server.sh`. Bootstrap stack: `./scripts/deploy/ubuntu-noble-native.sh` (see file header). Set public URLs: `./scripts/deploy/apply-public-url-on-server.sh`. DNS + TLS (e.g. `certbot --nginx`) as usual.
-
-**Day-to-day from your Mac:**
-
-- **3.1 Frontend** — Mac standalone build, rsync, restart `multica-web`: `./scripts/deploy/deploy-remote-frontend.sh` (or `make deploy-remote-frontend`).
-- **3.2 Backend** — Linux cross-compile, rsync `server/` + binaries, `migrate up`, restart `multica-server`: `./scripts/deploy/deploy-remote-backend.sh` (or `make deploy-remote-backend`).
-
-Environment: `DEPLOY_HOST` (default `chandao`), `DEPLOY_REMOTE_DIR` (default `/opt/multica`), `NO_MIGRATE=1` to skip migrations. Frontend build env: `scripts/deploy/pmo.chandao.web.env` or `.env.chandao.deploy` — see `scripts/deploy/env.chandao.web.example`.
-
-#### Backend logs
-
-- **Local:** logs in the terminal running the API; optional `LOG_LEVEL=debug|info|warn|error` in `.env`.
-- **systemd:** `journalctl -u multica-server -f` (API), `journalctl -u multica-web -f` (Next).
-- **Nginx:** `/var/log/nginx/access.log`, `error.log`.
-
-## CLI
-
-The `multica` CLI connects your local machine to Multica — authenticate, manage workspaces, and run the agent daemon.
-
-```bash
-# Install
-brew tap multica-ai/tap
-brew install multica
-
-# Authenticate and start
-multica login
-multica daemon start
-```
-
-The daemon auto-detects available agent CLIs (`claude`, `codex`) on your PATH. When an agent is assigned a task, the daemon creates an isolated environment, runs the agent, and reports results back.
-
-See the [CLI and Daemon Guide](CLI_AND_DAEMON.md) for the full command reference, daemon configuration, and advanced usage.
-
-## Quickstart
-
-Once you have the CLI installed (or signed up for [Multica Cloud](https://multica.ai)), follow these steps to assign your first task to an agent:
-
-### 1. Log in and start the daemon
-
-```bash
-multica login           # Authenticate with your Multica account
-multica daemon start    # Start the local agent runtime
-```
-
-The daemon runs in the background and keeps your machine connected to Multica. It auto-detects agent CLIs (`claude`, `codex`) available on your PATH.
+The daemon runs in the background and auto-detects agent CLIs (`claude`, `codex`, `copilot`, `openclaw`, `opencode`, `hermes`, `gemini`, `pi`, `cursor-agent`, `kimi`, `kiro-cli`) on your PATH.
 
 ### 2. Verify your runtime
 
@@ -130,13 +120,47 @@ Open your workspace in the Multica web app. Navigate to **Settings → Runtimes*
 
 ### 3. Create an agent
 
-Go to **Settings → Agents** and click **New Agent**. Pick the runtime you just connected and choose a provider (Claude Code or Codex). Give your agent a name — this is how it will appear on the board, in comments, and in assignments.
+Go to **Settings → Agents** and click **New Agent**. Pick the runtime you just connected and choose a provider (Claude Code, Codex, GitHub Copilot CLI, OpenClaw, OpenCode, Hermes, Gemini, Pi, Cursor Agent, Kimi, or Kiro CLI). Give your agent a name — this is how it will appear on the board, in comments, and in assignments.
 
 ### 4. Assign your first task
 
 Create an issue from the board (or via `multica issue create`), then assign it to your new agent. The agent will automatically pick up the task, execute it on your runtime, and report progress — just like a human teammate.
 
-That's it! Your agent is now part of the team. 🎉
+---
+
+## Multica vs Paperclip
+
+| | Multica | Paperclip |
+|---|---------|-----------|
+| **Focus** | Team AI agent collaboration platform | Solo AI agent company simulator |
+| **User model** | Multi-user teams with roles & permissions | Single board operator |
+| **Agent interaction** | Issues + Chat conversations | Issues + Heartbeat |
+| **Deployment** | Cloud-first | Local-first |
+| **Management depth** | Lightweight (Issues / Projects / Labels) | Heavy governance (Org chart / Approvals / Budgets) |
+| **Extensibility** | Skills system | Skills + Plugin system |
+
+**TL;DR — Multica is built for teams that want to collaborate with AI agents on real projects together.**
+
+---
+
+## CLI
+
+The `multica` CLI connects your local machine to Multica — authenticate, manage workspaces, and run the agent daemon.
+
+| Command | Description |
+|---------|-------------|
+| `multica login` | Authenticate (opens browser) |
+| `multica daemon start` | Start the local agent runtime |
+| `multica daemon status` | Check daemon status |
+| `multica setup` | One-command setup for Multica Cloud (configure + login + start daemon) |
+| `multica setup self-host` | Same, but for self-hosted deployments |
+| `multica issue list` | List issues in your workspace |
+| `multica issue create` | Create a new issue |
+| `multica update` | Update to the latest version |
+
+See the [CLI and Daemon Guide](CLI_AND_DAEMON.md) for the full command reference.
+
+---
 
 ## Architecture
 
@@ -147,9 +171,10 @@ That's it! Your agent is now part of the team. 🎉
 └──────────────┘     └──────┬───────┘     └──────────────────┘
                             │
                      ┌──────┴───────┐
-                     │ Agent Daemon │  (runs on your machine)
-                     │ Claude/Codex │
-                     └──────────────┘
+                     │ Agent Daemon │  runs on your machine
+                     └──────────────┘  (Claude Code, Codex, GitHub Copilot CLI,
+                                        OpenCode, OpenClaw, Hermes, Gemini,
+                                        Pi, Cursor Agent, Kimi, Kiro CLI)
 ```
 
 | Layer | Stack |
@@ -157,7 +182,7 @@ That's it! Your agent is now part of the team. 🎉
 | Frontend | Next.js 16 (App Router) |
 | Backend | Go (Chi router, sqlc, gorilla/websocket) |
 | Database | PostgreSQL 17 with pgvector |
-| Agent Runtime | Local daemon executing Claude Code or Codex |
+| Agent Runtime | Local daemon executing Claude Code, Codex, GitHub Copilot CLI, OpenClaw, OpenCode, Hermes, Gemini, Pi, Cursor Agent, Kimi, or Kiro CLI |
 
 ## Development
 
@@ -166,14 +191,9 @@ For contributors working on the Multica codebase, see the [Contributing Guide](C
 **Prerequisites:** [Node.js](https://nodejs.org/) v20+, [pnpm](https://pnpm.io/) v10.28+, [Go](https://go.dev/) v1.26+, [Docker](https://www.docker.com/)
 
 ```bash
-pnpm install
-cp .env.example .env
-make setup
-make start
+make dev
 ```
 
+`make dev` auto-detects your environment (main checkout or worktree), creates the env file, installs dependencies, sets up the database, runs migrations, and starts all services.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development workflow, worktree support, testing, and troubleshooting.
-
-## License
-
-[Apache 2.0](LICENSE)

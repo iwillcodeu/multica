@@ -14,7 +14,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO "user" (name, email, avatar_url)
 VALUES ($1, $2, $3)
-RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
 `
 
 type CreateUserParams struct {
@@ -33,13 +33,18 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PasswordHash,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, name, email, avatar_url, created_at, updated_at, password_hash FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language FROM "user"
 WHERE id = $1
 `
 
@@ -53,13 +58,18 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PasswordHash,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, avatar_url, created_at, updated_at, password_hash FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language FROM "user"
 WHERE email = $1
 `
 
@@ -73,100 +83,177 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PasswordHash,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
 	)
 	return i, err
 }
 
-const isDisplayNameTaken = `-- name: IsDisplayNameTaken :one
-SELECT EXISTS (
-  SELECT 1 FROM "user"
-  WHERE lower(btrim(name)) = lower(btrim($1::text))
-) AS taken
+const joinCloudWaitlist = `-- name: JoinCloudWaitlist :one
+UPDATE "user" SET
+    cloud_waitlist_email = $2,
+    cloud_waitlist_reason = $3,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
 `
 
-func (q *Queries) IsDisplayNameTaken(ctx context.Context, checkName string) (bool, error) {
-	row := q.db.QueryRow(ctx, isDisplayNameTaken, checkName)
-	var taken bool
-	err := row.Scan(&taken)
-	return taken, err
+type JoinCloudWaitlistParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	CloudWaitlistEmail  pgtype.Text `json:"cloud_waitlist_email"`
+	CloudWaitlistReason pgtype.Text `json:"cloud_waitlist_reason"`
 }
 
-const isDisplayNameTakenByOther = `-- name: IsDisplayNameTakenByOther :one
-SELECT EXISTS (
-  SELECT 1 FROM "user"
-  WHERE lower(btrim(name)) = lower(btrim($1::text))
-    AND id <> $2
-) AS taken
+// Records interest in cloud runtimes. Does NOT mark onboarding
+// complete — the user still has to pick a real path (CLI / Skip)
+// in Step 3. Repeating the call overwrites email + reason.
+func (q *Queries) JoinCloudWaitlist(ctx context.Context, arg JoinCloudWaitlistParams) (User, error) {
+	row := q.db.QueryRow(ctx, joinCloudWaitlist, arg.ID, arg.CloudWaitlistEmail, arg.CloudWaitlistReason)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+	)
+	return i, err
+}
+
+const markUserOnboarded = `-- name: MarkUserOnboarded :one
+UPDATE "user" SET
+    onboarded_at = COALESCE(onboarded_at, now()),
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
 `
 
-type IsDisplayNameTakenByOtherParams struct {
-	CheckName string      `json:"check_name"`
-	ExcludeID pgtype.UUID `json:"exclude_id"`
+func (q *Queries) MarkUserOnboarded(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, markUserOnboarded, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+	)
+	return i, err
 }
 
-func (q *Queries) IsDisplayNameTakenByOther(ctx context.Context, arg IsDisplayNameTakenByOtherParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isDisplayNameTakenByOther, arg.CheckName, arg.ExcludeID)
-	var taken bool
-	err := row.Scan(&taken)
-	return taken, err
-}
-
-const setUserPasswordHash = `-- name: SetUserPasswordHash :exec
-UPDATE "user" SET password_hash = $2, updated_at = now() WHERE id = $1
+const patchUserOnboarding = `-- name: PatchUserOnboarding :one
+UPDATE "user" SET
+    onboarding_questionnaire = COALESCE($1, onboarding_questionnaire),
+    updated_at = now()
+WHERE id = $2
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
 `
 
-type SetUserPasswordHashParams struct {
-	ID           pgtype.UUID `json:"id"`
-	PasswordHash pgtype.Text `json:"password_hash"`
+type PatchUserOnboardingParams struct {
+	Questionnaire []byte      `json:"questionnaire"`
+	ID            pgtype.UUID `json:"id"`
 }
 
-func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error {
-	_, err := q.db.Exec(ctx, setUserPasswordHash, arg.ID, arg.PasswordHash)
-	return err
+func (q *Queries) PatchUserOnboarding(ctx context.Context, arg PatchUserOnboardingParams) (User, error) {
+	row := q.db.QueryRow(ctx, patchUserOnboarding, arg.Questionnaire, arg.ID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+	)
+	return i, err
+}
+
+const setStarterContentState = `-- name: SetStarterContentState :one
+UPDATE "user" SET
+    starter_content_state = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+`
+
+type SetStarterContentStateParams struct {
+	ID                  pgtype.UUID `json:"id"`
+	StarterContentState pgtype.Text `json:"starter_content_state"`
+}
+
+// Atomically transition starter_content_state. The handler is
+// responsible for checking the current value first (to decide between
+// "transition NULL -> imported and run the seeding" vs "already
+// decided, short-circuit"). Using COALESCE here would swallow the
+// transition, so this is a straight assignment.
+func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterContentStateParams) (User, error) {
+	row := q.db.QueryRow(ctx, setStarterContentState, arg.ID, arg.StarterContentState)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+	)
+	return i, err
 }
 
 const updateUser = `-- name: UpdateUser :one
 UPDATE "user" SET
     name = COALESCE($2, name),
     avatar_url = COALESCE($3, avatar_url),
+    language = COALESCE($4, language),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
 `
 
 type UpdateUserParams struct {
 	ID        pgtype.UUID `json:"id"`
 	Name      string      `json:"name"`
 	AvatarUrl pgtype.Text `json:"avatar_url"`
+	Language  pgtype.Text `json:"language"`
 }
 
 func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, updateUser, arg.ID, arg.Name, arg.AvatarUrl)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Email,
-		&i.AvatarUrl,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PasswordHash,
+	row := q.db.QueryRow(ctx, updateUser,
+		arg.ID,
+		arg.Name,
+		arg.AvatarUrl,
+		arg.Language,
 	)
-	return i, err
-}
-
-const updateUserName = `-- name: UpdateUserName :one
-UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash
-`
-
-type UpdateUserNameParams struct {
-	ID   pgtype.UUID `json:"id"`
-	Name string      `json:"name"`
-}
-
-func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) (User, error) {
-	row := q.db.QueryRow(ctx, updateUserName, arg.ID, arg.Name)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -175,7 +262,12 @@ func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) 
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.PasswordHash,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
 	)
 	return i, err
 }

@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { MulticaIcon } from "@/components/multica-icon";
-import { cn } from "@/lib/utils";
-import { useAuthStore } from "@/features/auth";
+import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { cn } from "@multica/ui/lib/utils";
+import { useAuthStore } from "@multica/core/auth";
+import { captureDownloadIntent } from "@multica/core/analytics";
+import { XMark, GitHubMark, githubUrl, twitterUrl } from "./shared";
 import { useLocale, locales, localeLabels } from "../i18n";
 
 export function LandingFooter() {
@@ -27,9 +29,27 @@ export function LandingFooter() {
             <p className="mt-4 max-w-[300px] text-[14px] leading-[1.7] text-white/50 sm:text-[15px]">
               {t.footer.tagline}
             </p>
+            <div className="mt-4 flex items-center gap-3">
+              <Link
+                href={twitterUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/40 transition-colors hover:text-white"
+              >
+                <XMark className="size-4" />
+              </Link>
+              <Link
+                href={githubUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-white/40 transition-colors hover:text-white"
+              >
+                <GitHubMark className="size-4" />
+              </Link>
+            </div>
             <div className="mt-6">
               <Link
-                href={user ? "/projects" : "/login"}
+                href={user ? "/" : "/login"}
                 className="inline-flex items-center justify-center rounded-[11px] bg-white px-5 py-2.5 text-[13px] font-semibold text-[#0a0d12] transition-colors hover:bg-white/88"
               >
                 {user ? t.header.dashboard : t.footer.cta}
@@ -52,6 +72,11 @@ export function LandingFooter() {
                         {...(link.href.startsWith("http")
                           ? { target: "_blank", rel: "noreferrer" }
                           : {})}
+                        onClick={
+                          link.href === "/download"
+                            ? () => captureDownloadIntent("landing_footer")
+                            : undefined
+                        }
                         className="text-[14px] text-white/50 transition-colors hover:text-white"
                       >
                         {link.label}

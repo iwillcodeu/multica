@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,32 +16,52 @@ import (
 
 func uuidToString(u pgtype.UUID) string { return util.UUIDToString(u) }
 
-// Auth middleware validates JWT tokens or Personal Access Tokens from the Authorization header.
+// Auth middleware validates JWT tokens or Personal Access Tokens.
+// Token sources (in priority order):
+//  1. Authorization: Bearer <token> header (PAT or JWT)
+//  2. multica_auth HttpOnly cookie (JWT) — requires valid CSRF token for state-changing requests
+//
 // Sets X-User-ID and X-User-Email headers on the request for downstream handlers.
-func Auth(queries *db.Queries) func(http.Handler) http.Handler {
+//
+// patCache is optional; when non-nil, PAT lookups are cached with a short
+// TTL (auth.AuthCacheTTL). On cache hit the middleware skips both the DB
+// SELECT and the last_used_at UPDATE — last_used_at is therefore refreshed
+// at most once per TTL window per token, not per request.
+func Auth(queries *db.Queries, patCache *auth.PATCache) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				slog.Debug("auth: missing authorization header", "path", r.URL.Path)
-				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
+			tokenString, fromCookie := extractToken(r)
+			if tokenString == "" {
+				slog.Debug("auth: no token found", "path", r.URL.Path)
+				http.Error(w, `{"error":"missing authorization"}`, http.StatusUnauthorized)
 				return
 			}
 
-			tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-			if tokenString == authHeader {
-				slog.Debug("auth: invalid format", "path", r.URL.Path)
-				http.Error(w, `{"error":"invalid authorization format"}`, http.StatusUnauthorized)
+			// Cookie-based auth requires CSRF validation for state-changing methods.
+			if fromCookie && !auth.ValidateCSRF(r) {
+				slog.Debug("auth: CSRF validation failed", "path", r.URL.Path)
+				http.Error(w, `{"error":"CSRF validation failed"}`, http.StatusForbidden)
 				return
 			}
 
 			// PAT: tokens starting with "mul_"
 			if strings.HasPrefix(tokenString, "mul_") {
+				hash := auth.HashToken(tokenString)
+
+				// Cache hit: TTL has not expired, the token was valid the
+				// last time we looked, and nothing has invalidated the
+				// entry since. Skip the DB SELECT and the last_used_at
+				// UPDATE — last_used_at is bumped once per TTL window.
+				if userID, ok := patCache.Get(r.Context(), hash); ok {
+					r.Header.Set("X-User-ID", userID)
+					next.ServeHTTP(w, r)
+					return
+				}
+
 				if queries == nil {
 					http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 					return
 				}
-				hash := auth.HashToken(tokenString)
 				pat, err := queries.GetPersonalAccessTokenByHash(r.Context(), hash)
 				if err != nil {
 					slog.Warn("auth: invalid PAT", "path", r.URL.Path, "error", err)
@@ -48,9 +69,21 @@ func Auth(queries *db.Queries) func(http.Handler) http.Handler {
 					return
 				}
 
-				r.Header.Set("X-User-ID", uuidToString(pat.UserID))
+				userID := uuidToString(pat.UserID)
+				r.Header.Set("X-User-ID", userID)
 
-				// Best-effort: update last_used_at
+				// Clamp cache TTL to the token's remaining lifetime so a
+				// PAT expiring in <AuthCacheTTL can't continue passing
+				// auth on a cache hit after expires_at.
+				var expiresAt time.Time
+				if pat.ExpiresAt.Valid {
+					expiresAt = pat.ExpiresAt.Time
+				}
+				patCache.Set(r.Context(), hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
+
+				// Cache miss = TTL expired (or first use after revoke /
+				// process restart). Refresh last_used_at; subsequent hits
+				// within the TTL window skip this write entirely.
 				go queries.UpdatePersonalAccessTokenLastUsed(context.Background(), pat.ID)
 
 				next.ServeHTTP(w, r)
@@ -91,4 +124,21 @@ func Auth(queries *db.Queries) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// extractToken returns the bearer token and whether it came from a cookie.
+// Priority: Authorization header > multica_auth cookie.
+func extractToken(r *http.Request) (token string, fromCookie bool) {
+	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+		if tokenString != authHeader {
+			return tokenString, false
+		}
+	}
+
+	if cookie, err := r.Cookie(auth.AuthCookieName); err == nil && cookie.Value != "" {
+		return cookie.Value, true
+	}
+
+	return "", false
 }

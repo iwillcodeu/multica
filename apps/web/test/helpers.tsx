@@ -1,7 +1,7 @@
 import React from "react";
 import { vi } from "vitest";
 import { render, type RenderOptions } from "@testing-library/react";
-import type { User, Workspace, MemberWithUser, Agent } from "@/shared/types";
+import type { User, Workspace, MemberWithUser, Agent } from "@multica/core/types";
 
 // Mock user
 export const mockUser: User = {
@@ -9,6 +9,12 @@ export const mockUser: User = {
   name: "Test User",
   email: "test@multica.ai",
   avatar_url: null,
+  onboarded_at: "2026-01-01T00:00:00Z",
+  onboarding_questionnaire: {},
+  // Matches real server behavior for anyone who onboarded before this
+  // field shipped — migration 054 backfills 'skipped_legacy'.
+  starter_content_state: "skipped_legacy",
+  language: null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z",
 };
@@ -54,12 +60,14 @@ export const mockAgents: Agent[] = [
     status: "idle",
     runtime_mode: "cloud",
     runtime_config: {},
+    custom_env: {},
+    custom_args: [],
+    custom_env_redacted: false,
     visibility: "workspace",
     max_concurrent_tasks: 3,
+    model: "",
     owner_id: null,
     skills: [],
-    tools: [],
-    triggers: [],
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     archived_at: null,
@@ -68,7 +76,7 @@ export const mockAgents: Agent[] = [
 ];
 
 // Mock auth context value
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+ 
 export const mockAuthValue: Record<string, any> = {
   user: mockUser,
   workspace: mockWorkspace,
@@ -77,16 +85,8 @@ export const mockAuthValue: Record<string, any> = {
   isLoading: false,
   login: vi.fn(),
   logout: vi.fn(),
-  workspaces: [mockWorkspace],
-  switchWorkspace: vi.fn(),
-  createWorkspace: vi.fn(),
   updateWorkspace: vi.fn(),
   updateCurrentUser: vi.fn(),
-  leaveWorkspace: vi.fn(),
-  deleteWorkspace: vi.fn(),
-  refreshWorkspaces: vi.fn(),
-  refreshMembers: vi.fn(),
-  refreshAgents: vi.fn(),
   getMemberName: (userId: string) => {
     const m = mockMembers.find((m) => m.user_id === userId);
     return m?.name ?? "Unknown";

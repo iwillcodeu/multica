@@ -18,15 +18,14 @@ import {
   Sparkles,
   UserMinus,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn } from "@multica/ui/lib/utils";
 import { ImageIcon } from "./shared";
 import { useLocale } from "../i18n";
 import type { LandingDict } from "../i18n";
-import { StatusIcon } from "@/features/issues/components/status-icon";
-import { PriorityIcon } from "@/features/issues/components/priority-icon";
-import { STATUS_CONFIG } from "@/features/issues/config/status";
-import { PRIORITY_CONFIG } from "@/features/issues/config/priority";
-import type { IssueStatus, IssuePriority } from "@/shared/types";
+import { StatusIcon, PriorityIcon } from "@multica/views/issues/components";
+import { STATUS_CONFIG } from "@multica/core/issues/config/status";
+import { PRIORITY_CONFIG } from "@multica/core/issues/config/priority";
+import type { IssueStatus, IssuePriority } from "@multica/core/types";
 
 /* ------------------------------------------------------------------ */
 /*  Mock ActorAvatar — mirrors the real ActorAvatar styling exactly     */
@@ -702,14 +701,9 @@ const mockUsageData = USAGE_SEEDS.map((s, i) => ({
 
 /* Heatmap color helper — same as real ActivityHeatmap */
 function getHeatmapColor(level: number): string {
-  const colors = [
-    "var(--color-muted, hsl(var(--muted)))",
-    "hsl(var(--chart-3) / 0.3)",
-    "hsl(var(--chart-3) / 0.5)",
-    "hsl(var(--chart-3) / 0.75)",
-    "hsl(var(--chart-3) / 1)",
-  ];
-  return colors[level] ?? colors[0]!;
+  if (level === 0) return "var(--color-muted)";
+  const opacities = ["25%", "45%", "68%", "90%"];
+  return `color-mix(in oklch, var(--color-foreground) ${opacities[level - 1]}, transparent)`;
 }
 
 /* Generate heatmap cells — simplified version of real ActivityHeatmap */
@@ -767,7 +761,7 @@ function DailyCostBars({ data }: { data: typeof mockUsageData }) {
             width={8}
             height={Math.max(h, 2)}
             rx={1}
-            fill="hsl(var(--chart-1))"
+            fill="var(--color-chart-1)"
           />
         );
       })}
