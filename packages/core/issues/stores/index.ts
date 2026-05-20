@@ -11,8 +11,8 @@ export { useIssuesScopeStore, type IssuesScope } from "./issues-scope-store";
 export { useCommentCollapseStore } from "./comment-collapse-store";
 export {
   myIssuesViewStore,
-  type MyIssuesViewState,
   type MyIssuesScope,
+  type MyIssuesViewState,
 } from "./my-issues-view-store";
 export {
   useIssueViewStore,

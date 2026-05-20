@@ -602,14 +602,14 @@ func (j *xiaoanProcessJob) notifyGroup(ctx context.Context, cli *dingtalk.Client
 
 func (j *xiaoanProcessJob) resolveProjectID(ctx context.Context, name string) (string, error) {
 	wsUUID := parseUUID(j.workspaceID)
-	list, err := j.h.Queries.ListProjectsByWorkspace(ctx, wsUUID)
+	list, err := j.h.Queries.ListProjects(ctx, db.ListProjectsParams{WorkspaceID: wsUUID})
 	if err != nil {
 		return "", errors.New("系统错误：无法列出项目")
 	}
 	want := strings.TrimSpace(name)
 	var hits []db.Project
 	for _, p := range list {
-		if strings.EqualFold(strings.TrimSpace(p.Name), want) {
+		if strings.EqualFold(strings.TrimSpace(p.Title), want) {
 			hits = append(hits, p)
 		}
 	}

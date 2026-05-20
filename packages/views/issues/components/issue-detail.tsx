@@ -333,7 +333,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     currentUserRole === "owner" || currentUserRole === "admin";
   const { data: allIssues = [] } = useQuery(issueListOptions(wsId));
   const { getActorName } = useActorName();
-  const { uploadWithToast } = useFileUpload(api);
+  const { uploadWithToast } = useFileUpload(api, (error) => {
+    toast.error(error.message || "Upload failed");
+  });
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
     id: layoutId,
   });
@@ -1197,7 +1199,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   return (
                     <div key={entry.id} id={`comment-${entry.id}`}>
                       <CommentCard
-                        issueId={id}
+                        issueId={issue.id}
                         entry={entry}
                         replies={timelineView.threadReplies.get(entry.id) ?? EMPTY_REPLIES}
                         currentUserId={user?.id}
@@ -1276,7 +1278,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
             {/* Bottom comment input — no avatar, full width */}
             <div className="mt-4">
-              <CommentInput issueId={id} onSubmit={submitComment} />
+              <CommentInput issueId={issue.id} onSubmit={submitComment} />
             </div>
           </div>
         </div>

@@ -4,14 +4,14 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
+} from "@multica/ui/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -21,15 +21,15 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+} from "@multica/ui/components/ui/alert-dialog";
+import { Input } from "@multica/ui/components/ui/input";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import {
   canCreateOrRenameProjects,
   canDeleteProjects,
   useCurrentWorkspaceMember,
-} from "@/features/workspace";
-import { useProjectStore } from "../store";
+} from "@multica/core/workspace/hooks";
+import { useProjectStore } from "@multica/core/projects";
 
 export function ProjectBarActions({ projectId }: { projectId: string }) {
   const router = useRouter();
@@ -45,25 +45,25 @@ export function ProjectBarActions({ projectId }: { projectId: string }) {
 
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [name, setName] = useState(project?.name ?? "");
+  const [name, setName] = useState(project?.title ?? "");
   const [busy, setBusy] = useState(false);
 
   if (!canRename && !canDelete) return null;
 
   const openRename = () => {
-    setName(project?.name ?? "");
+    setName(project?.title ?? "");
     setRenameOpen(true);
   };
 
   const handleRename = async () => {
     const n = name.trim();
-    if (!n || busy || n === project?.name) {
+    if (!n || busy || n === project?.title) {
       setRenameOpen(false);
       return;
     }
     setBusy(true);
     try {
-      await updateProject(projectId, { name: n });
+      await updateProject(projectId, { title: n });
       toast.success("Project renamed");
       setRenameOpen(false);
     } catch (e) {
@@ -82,7 +82,7 @@ export function ProjectBarActions({ projectId }: { projectId: string }) {
       setDeleteOpen(false);
       const next = useProjectStore.getState().projects;
       if (next[0]) {
-        router.replace(`/projects/${next[0].id}`);
+        router.replace(`/projects/${next[0]!.id}`);
       } else {
         router.replace("/projects");
       }
@@ -140,7 +140,7 @@ export function ProjectBarActions({ projectId }: { projectId: string }) {
         open={renameOpen}
         onOpenChange={(o) => {
           setRenameOpen(o);
-          if (o) setName(project?.name ?? "");
+          if (o) setName(project?.title ?? "");
         }}
       >
         <DialogContent className="sm:max-w-md">
@@ -163,7 +163,7 @@ export function ProjectBarActions({ projectId }: { projectId: string }) {
             <Button
               type="button"
               onClick={() => void handleRename()}
-              disabled={!name.trim() || name.trim() === project?.name || busy}
+              disabled={!name.trim() || name.trim() === project?.title || busy}
             >
               {busy ? "Saving…" : "Save"}
             </Button>

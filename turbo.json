@@ -1,6 +1,8 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "globalEnv": [
+    "STANDALONE",
+    "MULTICA_STANDALONE_DEPLOY",
     "DATABASE_URL",
     "PORT",
     "FRONTEND_PORT",

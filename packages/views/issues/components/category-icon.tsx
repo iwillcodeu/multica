@@ -1,6 +1,6 @@
 import { Bug, ListTodo, Sparkles } from "lucide-react";
-import type { IssueCategory } from "@/shared/types";
-import { CATEGORY_CONFIG } from "@/features/issues/config";
+import type { IssueCategory } from "@multica/core/types";
+import { CATEGORY_CONFIG } from "@multica/core/issues/config";
 
 const ICONS: Record<IssueCategory, typeof Bug> = {
   bug: Bug,

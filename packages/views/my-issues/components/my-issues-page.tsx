@@ -27,7 +27,7 @@ import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { MyIssuesHeader } from "./my-issues-header";
 
-export function MyIssuesPage() {
+export function MyIssuesPage({ projectId }: { projectId?: string | null } = {}) {
   const { t } = useT("my-issues");
   const user = useAuthStore((s) => s.user);
   const workspace = useCurrentWorkspace();
@@ -37,6 +37,7 @@ export function MyIssuesPage() {
   const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
   const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
   const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
+  const categoryFilters = useStore(myIssuesViewStore, (s) => s.categoryFilters);
   const scope = useStore(myIssuesViewStore, (s) => s.scope);
 
   // Clear filter state when switching between workspaces (URL-driven).
@@ -56,18 +57,21 @@ export function MyIssuesPage() {
   }, [agents, user]);
 
   const filter: MyIssuesFilter = useMemo(() => {
-    if (!user) return {};
-    switch (scope) {
-      case "assigned":
-        return { assignee_id: user.id };
-      case "created":
-        return { creator_id: user.id };
-      case "agents":
-        return { assignee_ids: myAgentIds };
-      default:
-        return { assignee_id: user.id };
-    }
-  }, [scope, user, myAgentIds]);
+    if (!user) return projectId ? { project_id: projectId } : {};
+    const base = (() => {
+      switch (scope) {
+        case "assigned":
+          return { assignee_id: user.id };
+        case "created":
+          return { creator_id: user.id };
+        case "agents":
+          return { assignee_ids: myAgentIds };
+        default:
+          return { assignee_id: user.id };
+      }
+    })();
+    return projectId ? { ...base, project_id: projectId } : base;
+  }, [scope, user, myAgentIds, projectId]);
 
   const { data: myIssues = [], isLoading: loading } = useQuery(
     myIssueListOptions(wsId, scope, filter),
@@ -79,14 +83,15 @@ export function MyIssuesPage() {
       filterIssues(myIssues, {
         statusFilters,
         priorityFilters,
+        categoryFilters,
         assigneeFilters: [],
         includeNoAssignee: false,
         creatorFilters: [],
-        projectFilters: [],
+        projectFilters: projectId ? [projectId] : [],
         includeNoProject: false,
         labelFilters: [],
       }),
-    [myIssues, statusFilters, priorityFilters],
+    [myIssues, statusFilters, priorityFilters, categoryFilters, projectId],
   );
 
   const { data: childProgressMap = new Map() } = useQuery(childIssueProgressOptions(wsId));
@@ -191,6 +196,7 @@ export function MyIssuesPage() {
                 childProgressMap={childProgressMap}
                 myIssuesScope={scope}
                 myIssuesFilter={filter}
+                projectId={projectId ?? undefined}
               />
             ) : (
               <ListView
@@ -199,6 +205,7 @@ export function MyIssuesPage() {
                 childProgressMap={childProgressMap}
                 myIssuesScope={scope}
                 myIssuesFilter={filter}
+                projectId={projectId ?? undefined}
               />
             )}
           </div>

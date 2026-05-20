@@ -10,26 +10,50 @@ import {
 } from "./view-store";
 import { registerForWorkspaceRehydration } from "../../platform/workspace-storage";
 
-export interface MyIssuesViewState extends IssueViewState {}
+export type MyIssuesScope = "assigned" | "created" | "agents";
+
+export interface MyIssuesViewState extends IssueViewState {
+  scope: MyIssuesScope;
+  setScope: (next: MyIssuesScope) => void;
+}
 
 const basePersist = viewStorePersistOptions("multica_my_issues_view");
+
+const defaultScope: MyIssuesScope = "assigned";
+
+function isMyIssuesScope(v: unknown): v is MyIssuesScope {
+  return v === "assigned" || v === "created" || v === "agents";
+}
 
 const _myIssuesViewStore = createStore<MyIssuesViewState>()(
   persist(
     (set) => ({
       ...viewStoreSlice(set as unknown as StoreApi<IssueViewState>["setState"]),
+      scope: defaultScope,
+      setScope: (scope) => set({ scope }),
     }),
     {
       name: basePersist.name,
       storage: basePersist.storage,
       partialize: (state: MyIssuesViewState) => ({
         ...basePersist.partialize(state),
+        scope: state.scope,
       }),
-      // Reuse the same deep-merge as the base view store so newly added
-      // cardProperties toggles inherit defaults for existing users. Without
-      // this, the my-issues page renders no labels because the persisted
-      // snapshot predates the `labels` key and shallow-merge wins.
-      merge: mergeViewStatePersisted<MyIssuesViewState>,
+        merge: (persisted, current): MyIssuesViewState => {
+        const merged = mergeViewStatePersisted<MyIssuesViewState>(persisted, current);
+        const rawScope = (persisted as Partial<MyIssuesViewState> | null)?.scope;
+        const scope =
+          isMyIssuesScope(rawScope)
+            ? rawScope
+            : isMyIssuesScope(current.scope)
+              ? current.scope
+              : defaultScope;
+        return {
+          ...merged,
+          scope,
+          setScope: current.setScope,
+        };
+      },
     },
   ),
 );

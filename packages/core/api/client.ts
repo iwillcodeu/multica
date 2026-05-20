@@ -312,6 +312,23 @@ export class ApiClient {
     });
   }
 
+  async loginPassword(body: { email: string; password: string }): Promise<LoginResponse> {
+    return this.fetch("/api/auth/login-password", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async changeMyPassword(payload: {
+    current_password?: string;
+    new_password: string;
+  }): Promise<User> {
+    return this.fetch("/api/me/change-password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
   async googleLogin(code: string, redirectUri: string): Promise<LoginResponse> {
     return this.fetch("/auth/google", {
       method: "POST",

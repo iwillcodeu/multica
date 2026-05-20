@@ -41,9 +41,12 @@ import {
 import { Switch } from "@multica/ui/components/ui/switch";
 import {
   ALL_STATUSES,
+  CATEGORY_CONFIG,
+  ISSUE_CATEGORIES,
   PRIORITY_ORDER,
 } from "@multica/core/issues/config";
 import { StatusIcon, PriorityIcon } from ".";
+import { CategoryIcon } from "./category-icon";
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
@@ -150,7 +153,7 @@ function useIssueCounts(allIssues: Issue[]) {
       }
     }
 
-    return { status, priority, assignee, creator, noAssignee, project, noProject, label };
+    return { status, priority, category, assignee, creator, noAssignee, project, noProject, label };
   }, [allIssues]);
 }
 
@@ -471,6 +474,7 @@ export function IssuesHeader({ scopedIssues }: { scopedIssues: Issue[] }) {
   const projectFilters = useViewStore((s) => s.projectFilters);
   const includeNoProject = useViewStore((s) => s.includeNoProject);
   const labelFilters = useViewStore((s) => s.labelFilters);
+  const categoryFilters = useViewStore((s) => s.categoryFilters);
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
   const cardProperties = useViewStore((s) => s.cardProperties);

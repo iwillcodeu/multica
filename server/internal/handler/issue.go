@@ -45,7 +45,6 @@ type IssueResponse struct {
 	DueDate            *string                 `json:"due_date"`
 	CreatedAt          string                  `json:"created_at"`
 	UpdatedAt          string                  `json:"updated_at"`
-	ProjectID          string                  `json:"project_id"`
 	Reactions          []IssueReactionResponse `json:"reactions,omitempty"`
 	Attachments        []AttachmentResponse    `json:"attachments,omitempty"`
 	// Labels are bulk-attached by list/detail endpoints so the client can render
@@ -79,7 +78,6 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		DueDate:       timestampToPtr(i.DueDate),
 		CreatedAt:     timestampToString(i.CreatedAt),
 		UpdatedAt:     timestampToString(i.UpdatedAt),
-		ProjectID:     uuidToString(i.ProjectID),
 	}
 }
 
@@ -95,6 +93,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
 		Priority:      i.Priority,
+		Category:      i.Category,
 		AssigneeType:  textToPtr(i.AssigneeType),
 		AssigneeID:    uuidToPtr(i.AssigneeID),
 		CreatorType:   i.CreatorType,
@@ -150,6 +149,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		Description:   textToPtr(i.Description),
 		Status:        i.Status,
 		Priority:      i.Priority,
+		Category:      i.Category,
 		AssigneeType:  textToPtr(i.AssigneeType),
 		AssigneeID:    uuidToPtr(i.AssigneeID),
 		CreatorType:   i.CreatorType,
@@ -1078,6 +1078,7 @@ type CreateIssueRequest struct {
 	Description        *string  `json:"description"`
 	Status             string   `json:"status"`
 	Priority           string   `json:"priority"`
+	Category           *string  `json:"category"`
 	AssigneeType       *string  `json:"assignee_type"`
 	AssigneeID         *string  `json:"assignee_id"`
 	ParentIssueID      *string  `json:"parent_issue_id"`
@@ -1091,6 +1092,16 @@ type CreateIssueRequest struct {
 	// origin_id=agent_task_queue.id).
 	OriginType *string `json:"origin_type,omitempty"`
 	OriginID   *string `json:"origin_id,omitempty"`
+}
+
+func normalizeIssueCategory(s string) (string, bool) {
+	v := strings.ToLower(strings.TrimSpace(s))
+	switch v {
+	case "bug", "feature", "task":
+		return v, true
+	default:
+		return "", false
+	}
 }
 
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
@@ -1126,15 +1137,16 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		priority = "none"
 	}
 
-	category := strings.TrimSpace(req.Category)
-	if category == "" {
-		category = "task"
-	} else {
-		var ok bool
-		category, ok = normalizeIssueCategory(category)
-		if !ok {
-			writeError(w, http.StatusBadRequest, "invalid category, expected bug, feature, or task")
-			return
+	category := "task"
+	if req.Category != nil {
+		raw := strings.TrimSpace(*req.Category)
+		if raw != "" {
+			var okCat bool
+			category, okCat = normalizeIssueCategory(raw)
+			if !okCat {
+				writeError(w, http.StatusBadRequest, "invalid category, expected bug, feature, or task")
+				return
+			}
 		}
 	}
 
@@ -1157,14 +1169,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var parentIssueID pgtype.UUID
-	var projectID pgtype.UUID
-	if req.ProjectID != nil {
-		id, ok := parseUUIDOrBadRequest(w, *req.ProjectID, "project_id")
-		if !ok {
-			return
-		}
-		projectID = id
-	}
+	projectIDArg := req.ProjectID
 	if req.ParentIssueID != nil {
 		id, ok := parseUUIDOrBadRequest(w, *req.ParentIssueID, "parent_issue_id")
 		if !ok {
@@ -1180,8 +1185,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
 			return
 		}
-		if req.ProjectID == nil {
-			projectID = parent.ProjectID
+		if projectIDArg == nil && parent.ProjectID.Valid {
+			s := uuidToString(parent.ProjectID)
+			projectIDArg = &s
 		}
 	}
 
@@ -1217,7 +1223,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	projectID, err := h.resolveProjectForNewIssue(r.Context(), qtx, workspaceID, req.ProjectID)
+	projectID, err := h.resolveProjectForNewIssue(r.Context(), qtx, workspaceID, projectIDArg)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -1260,6 +1266,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			Description:   ptrToText(req.Description),
 			Status:        status,
 			Priority:      priority,
+			Category:      category,
 			AssigneeType:  assigneeType,
 			AssigneeID:    assigneeID,
 			CreatorType:   creatorType,
@@ -1279,6 +1286,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			Description:   ptrToText(req.Description),
 			Status:        status,
 			Priority:      priority,
+			Category:      category,
 			AssigneeType:  assigneeType,
 			AssigneeID:    assigneeID,
 			CreatorType:   creatorType,
@@ -1379,6 +1387,7 @@ type UpdateIssueRequest struct {
 	Description        *string  `json:"description"`
 	Status             *string  `json:"status"`
 	Priority           *string  `json:"priority"`
+	Category           *string  `json:"category"`
 	AssigneeType       *string  `json:"assignee_type"`
 	AssigneeID         *string  `json:"assignee_id"`
 	Position           *float64 `json:"position"`
@@ -1764,8 +1773,7 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// Collect all attachment URLs (issue-level + comment-level) before CASCADE delete.
 	attachmentURLs, _ := h.Queries.ListAttachmentURLsByIssueOrComments(r.Context(), issue.ID)
 
-	err := h.Queries.DeleteIssue(r.Context(), issue.ID)
-	if err != nil {
+	if err := h.Queries.DeleteIssue(r.Context(), issue.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete issue")
 		return
 	}
@@ -2085,6 +2093,10 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	member, ok := h.requireWorkspaceMember(w, r, workspaceID, "workspace not found")
+	if !ok {
+		return
+	}
 	deleted := 0
 	for _, issueID := range req.IssueIDs {
 		issueUUID, err := util.ParseUUID(issueID)
@@ -2127,6 +2139,28 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
+func (h *Handler) canChangeIssueCategory(ctx context.Context, r *http.Request, prevIssue db.Issue, workspaceID string) bool {
+	userID := strings.TrimSpace(requestUserID(r))
+	if userID == "" {
+		return false
+	}
+	memberObj, err := h.getWorkspaceMember(ctx, userID, workspaceID)
+	if err != nil {
+		return false
+	}
+	if roleAllowed(memberObj.Role, "owner", "admin") {
+		return true
+	}
+	if prevIssue.CreatorType == "member" && prevIssue.CreatorID.Valid && uuidToString(prevIssue.CreatorID) == userID {
+		return true
+	}
+	if prevIssue.AssigneeType.Valid && prevIssue.AssigneeType.String == "member" &&
+		prevIssue.AssigneeID.Valid && uuidToString(prevIssue.AssigneeID) == userID {
+		return true
+	}
+	return false
+}
+
 func (h *Handler) resolveProjectForNewIssue(ctx context.Context, qtx *db.Queries, workspaceID string, projectIDPtr *string) (pgtype.UUID, error) {
 	wsUUID := parseUUID(workspaceID)
 	if projectIDPtr != nil && *projectIDPtr != "" {
@@ -2142,9 +2176,9 @@ func (h *Handler) resolveProjectForNewIssue(ctx context.Context, qtx *db.Queries
 		}
 		return p, nil
 	}
-	proj, err := qtx.GetFirstProjectInWorkspace(ctx, wsUUID)
-	if err != nil {
+	projs, err := qtx.ListProjects(ctx, db.ListProjectsParams{WorkspaceID: wsUUID})
+	if err != nil || len(projs) == 0 {
 		return pgtype.UUID{}, fmt.Errorf("no project in workspace; create a project first")
 	}
-	return proj.ID, nil
+	return projs[0].ID, nil
 }

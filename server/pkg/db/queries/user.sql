@@ -63,6 +63,16 @@ UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING *;
 -- name: SetUserPasswordHash :exec
 UPDATE "user" SET password_hash = $2, updated_at = now() WHERE id = $1;
 
+-- name: GetUserCredentialsByEmail :one
+SELECT id, password_hash FROM "user"
+WHERE email = $1;
+
+-- name: IsUserPasswordConfigured :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE id = $1 AND password_hash IS NOT NULL AND btrim(password_hash) <> ''
+);
+
 -- name: IsDisplayNameTaken :one
 SELECT EXISTS (
   SELECT 1 FROM "user"

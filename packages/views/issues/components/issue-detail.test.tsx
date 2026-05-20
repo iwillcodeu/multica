@@ -308,6 +308,7 @@ const mockIssue: Issue = {
   description: "Add JWT auth to the backend",
   status: "in_progress",
   priority: "high",
+  category: "feature",
   assignee_type: "member",
   assignee_id: "user-1",
   creator_type: "member",

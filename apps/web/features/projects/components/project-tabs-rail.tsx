@@ -18,30 +18,38 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useQuery } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { useAuthStore } from "@/features/auth";
+} from "@multica/ui/components/ui/dialog";
+import { Input } from "@multica/ui/components/ui/input";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
+import { useAuthStore } from "@multica/core/auth";
 import {
   canCreateOrRenameProjects,
   useCurrentWorkspaceMember,
-  useWorkspaceStore,
-} from "@/features/workspace";
-import type { Project } from "@/shared/types";
-import { useIssueStore } from "@/features/issues";
-import { savePersonalProjectTabOrder } from "../personal-project-tab-order";
-import { useProjectStore } from "../store";
-import { usePersonalProjectTabOrder } from "../use-personal-project-tab-order";
+} from "@multica/core/workspace/hooks";
+import { useCurrentWorkspace } from "@multica/core/paths";
+import type { Project } from "@multica/core/types/project";
+import { issueDetailOptions } from "@multica/core/issues/queries";
+import {
+  savePersonalProjectTabOrder,
+  usePersonalProjectTabOrder,
+  useProjectStore,
+} from "@multica/core/projects";
+
+function segmentAfterSegment(parts: readonly string[], seg: string): string | null {
+  const idx = parts.indexOf(seg);
+  return idx >= 0 && parts[idx + 1] ? parts[idx + 1]! : null;
+}
 
 function SortableProjectTab({
   project,
@@ -86,11 +94,11 @@ function SortableProjectTab({
                 isDragging && "pointer-events-none opacity-60",
               )}
             >
-              <span className="line-clamp-4 break-words">{project.name}</span>
+              <span className="line-clamp-4 break-words">{project.title}</span>
             </Link>
           }
         />
-        <TooltipContent side="right">{project.name}</TooltipContent>
+        <TooltipContent side="right">{project.title}</TooltipContent>
       </Tooltip>
     </div>
   );
@@ -99,13 +107,34 @@ function SortableProjectTab({
 export function ProjectTabsRail() {
   const pathname = usePathname();
   const router = useRouter();
-  const issues = useIssueStore((s) => s.issues);
+  const workspace = useCurrentWorkspace();
+  const wsId = workspace?.id ?? "";
+  useEffect(() => {
+    void useProjectStore.getState().fetch();
+  }, []);
+
+  const pathParts = useMemo(() => pathname.split("/").filter(Boolean), [pathname]);
+
+  const projectIdFromUrl = segmentAfterSegment(pathParts, "projects");
+  const issueIdFromUrl = segmentAfterSegment(pathParts, "issues");
+
+  const { data: issueDetail } = useQuery({
+    ...issueDetailOptions(wsId, issueIdFromUrl ?? ""),
+    enabled: Boolean(wsId && issueIdFromUrl),
+  });
+
+  const activeId = useMemo(() => {
+    if (projectIdFromUrl) return projectIdFromUrl;
+    if (issueIdFromUrl) return issueDetail?.project_id ?? null;
+    return null;
+  }, [projectIdFromUrl, issueIdFromUrl, issueDetail?.project_id]);
+
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
   const member = useCurrentWorkspaceMember();
   const canAddProject = canCreateOrRenameProjects(member?.role);
   const userId = useAuthStore((s) => s.user?.id ?? "");
-  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? "");
+  const workspaceId = workspace?.id ?? "";
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -143,16 +172,6 @@ export function ProjectTabsRail() {
     },
     [orderedProjects, userId, workspaceId],
   );
-
-  const activeId = useMemo(() => {
-    const parts = pathname.split("/").filter(Boolean);
-    if (parts[0] === "projects" && parts[1]) return parts[1];
-    if (parts[0] === "issues" && parts[1]) {
-      const issueId = parts[1];
-      return issues.find((i) => i.id === issueId)?.project_id ?? null;
-    }
-    return null;
-  }, [pathname, issues]);
 
   const handleCreate = async () => {
     const n = newName.trim();

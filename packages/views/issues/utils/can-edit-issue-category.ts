@@ -1,4 +1,4 @@
-import type { Issue, MemberRole } from "@/shared/types";
+import type { Issue, MemberRole } from "@multica/core/types";
 
 /** Whether the current user may change an issue's category (backend enforces the same rules). */
 export function canEditIssueCategory(

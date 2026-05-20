@@ -1,8 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
 import {
   DndContext,
   PointerSensor,
@@ -20,27 +18,30 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+import { cn } from "@multica/ui/lib/utils";
+import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
   DialogContent,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { useAuthStore } from "@/features/auth";
+} from "@multica/ui/components/ui/dialog";
+import { Input } from "@multica/ui/components/ui/input";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
+import { useAuthStore } from "@multica/core/auth";
 import {
   canCreateOrRenameProjects,
   useCurrentWorkspaceMember,
-  useWorkspaceStore,
-} from "@/features/workspace";
-import type { Project } from "@/shared/types";
-import { savePersonalProjectTabOrder } from "@/features/projects/personal-project-tab-order";
-import { useProjectStore } from "@/features/projects/store";
-import { usePersonalProjectTabOrder } from "@/features/projects/use-personal-project-tab-order";
+} from "@multica/core/workspace/hooks";
+import { useCurrentWorkspace } from "@multica/core/paths";
+import type { Project } from "@multica/core/types/project";
+import {
+  savePersonalProjectTabOrder,
+  usePersonalProjectTabOrder,
+  useProjectStore,
+} from "@multica/core/projects";
+import { AppLink, useNavigation } from "../../navigation";
 
 function SortableProjectTab({
   project,
@@ -74,7 +75,7 @@ function SortableProjectTab({
       <Tooltip>
         <TooltipTrigger
           render={
-            <Link
+            <AppLink
               href={`/my-issues/${project.id}`}
               className={cn(
                 "flex min-h-[72px] max-h-28 w-full items-center justify-center rounded-full px-0.5 py-1 text-[11px] font-medium leading-tight transition-colors",
@@ -85,25 +86,30 @@ function SortableProjectTab({
                 isDragging && "pointer-events-none opacity-60",
               )}
             >
-              <span className="line-clamp-4 break-words">{project.name}</span>
-            </Link>
+              <span className="line-clamp-4 break-words">{project.title}</span>
+            </AppLink>
           }
         />
-        <TooltipContent side="right">{project.name}</TooltipContent>
+        <TooltipContent side="right">{project.title}</TooltipContent>
       </Tooltip>
     </div>
   );
 }
 
 export function MyIssuesProjectTabsRail() {
-  const pathname = usePathname();
-  const router = useRouter();
+  const { push, pathname } = useNavigation();
+  const workspace = useCurrentWorkspace();
+  const workspaceId = workspace?.id ?? "";
+
+  useEffect(() => {
+    void useProjectStore.getState().fetch();
+  }, []);
+
   const projects = useProjectStore((s) => s.projects);
   const createProject = useProjectStore((s) => s.createProject);
   const member = useCurrentWorkspaceMember();
   const canAddProject = canCreateOrRenameProjects(member?.role);
   const userId = useAuthStore((s) => s.user?.id ?? "");
-  const workspaceId = useWorkspaceStore((s) => s.workspace?.id ?? "");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -144,15 +150,16 @@ export function MyIssuesProjectTabsRail() {
 
   const { allActive, projectActiveId } = useMemo(() => {
     const parts = pathname.split("/").filter(Boolean);
-    if (parts[0] !== "my-issues") {
+    const mi = parts.indexOf("my-issues");
+    if (mi < 0) {
       return { allActive: false, projectActiveId: null as string | null };
     }
-    if (parts.length === 1) {
+    const after = parts[mi + 1];
+    if (!after) {
       return { allActive: true, projectActiveId: null as string | null };
     }
-    const id = parts[1];
-    if (id && projects.some((p) => p.id === id)) {
-      return { allActive: false, projectActiveId: id };
+    if (projects.some((p) => p.id === after)) {
+      return { allActive: false, projectActiveId: after };
     }
     return { allActive: true, projectActiveId: null as string | null };
   }, [pathname, projects]);
@@ -165,7 +172,7 @@ export function MyIssuesProjectTabsRail() {
       const p = await createProject(n);
       setDialogOpen(false);
       setNewName("");
-      router.push(`/my-issues/${p.id}`);
+      push(`/my-issues/${p.id}`);
     } catch {
       toast.error("Failed to create project");
     } finally {
@@ -184,7 +191,7 @@ export function MyIssuesProjectTabsRail() {
         <Tooltip>
           <TooltipTrigger
             render={
-              <Link
+              <AppLink
                 href="/my-issues"
                 className={cn(
                   "flex min-h-[72px] max-h-28 w-full items-center justify-center rounded-full px-0.5 py-1 text-[11px] font-medium leading-tight transition-colors",
@@ -195,7 +202,7 @@ export function MyIssuesProjectTabsRail() {
                 )}
               >
                 <span className="line-clamp-4 break-words">All</span>
-              </Link>
+              </AppLink>
             }
           />
           <TooltipContent side="right">All projects</TooltipContent>

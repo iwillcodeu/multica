@@ -59,6 +59,7 @@ type UserResponse struct {
 	StarterContentState     *string         `json:"starter_content_state"`
 	CreatedAt               string          `json:"created_at"`
 	UpdatedAt               string          `json:"updated_at"`
+	HasPassword             bool            `json:"has_password"`
 }
 
 func userToResponse(u db.User) UserResponse {
@@ -81,6 +82,16 @@ func userToResponse(u db.User) UserResponse {
 		CreatedAt:               timestampToString(u.CreatedAt),
 		UpdatedAt:               timestampToString(u.UpdatedAt),
 	}
+}
+
+func (h *Handler) marshalUser(ctx context.Context, u db.User) (UserResponse, error) {
+	hasPw, err := h.Queries.IsUserPasswordConfigured(ctx, u.ID)
+	if err != nil {
+		return UserResponse{}, err
+	}
+	resp := userToResponse(u)
+	resp.HasPassword = hasPw
+	return resp, nil
 }
 
 type LoginResponse struct {
@@ -400,9 +411,14 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	ur, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  ur,
 	})
 }
 
@@ -418,7 +434,13 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(user))
+	payload, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, payload)
 }
 
 type UpdateMeRequest struct {
@@ -591,9 +613,14 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("user logged in via google", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	ur, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  ur,
 	})
 }
 
@@ -625,6 +652,83 @@ func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	auth.ClearAuthCookies(w)
 	writeJSON(w, http.StatusOK, map[string]string{"message": "logged out"})
+}
+
+type LoginPasswordRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+// LoginPassword issues a session cookie for accounts that configured a bcrypt password.
+func (h *Handler) LoginPassword(w http.ResponseWriter, r *http.Request) {
+	var req LoginPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	plainPassword := strings.TrimSpace(req.Password)
+	if email == "" || plainPassword == "" {
+		writeError(w, http.StatusBadRequest, "email and password are required")
+		return
+	}
+
+	row, err := h.Queries.GetUserCredentialsByEmail(r.Context(), email)
+	if err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusUnauthorized, "invalid email or password")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to look up user")
+		return
+	}
+
+	hashStored := ""
+	if row.PasswordHash.Valid {
+		hashStored = strings.TrimSpace(row.PasswordHash.String)
+	}
+
+	if hashStored == "" || !auth.PasswordMatches(hashStored, plainPassword) {
+		slog.Warn("password login rejected", append(logger.RequestAttrs(r), "email", email)...)
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+
+	user, err := h.Queries.GetUser(r.Context(), row.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		slog.Warn("login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	if err := auth.SetAuthCookies(w, tokenString); err != nil {
+		slog.Warn("failed to set auth cookies", "error", err)
+	}
+
+	if h.CFSigner != nil {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(30 * 24 * time.Hour)) {
+			http.SetCookie(w, cookie)
+		}
+	}
+
+	slog.Info("user logged in with password", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+
+	ur, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  ur,
+	})
 }
 
 func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
@@ -700,5 +804,106 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(updatedUser))
+	out, err := h.marshalUser(r.Context(), updatedUser)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword *string `json:"current_password,omitempty"`
+	NewPassword     string  `json:"new_password"`
+}
+
+// ChangeMyPassword sets or rotates the bcrypt password for the authenticated user.
+func (h *Handler) ChangeMyPassword(w http.ResponseWriter, r *http.Request) {
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+
+	var req ChangePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	newPassword := strings.TrimSpace(req.NewPassword)
+	if err := auth.ValidatePasswordSetting(newPassword); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	uid := parseUUID(userID)
+	ctx := r.Context()
+
+	hadPassword, err := h.Queries.IsUserPasswordConfigured(ctx, uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect password status")
+		return
+	}
+
+	u, err := h.Queries.GetUser(ctx, uid)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	row, credErr := h.Queries.GetUserCredentialsByEmail(ctx, u.Email)
+	if credErr != nil && !isNotFound(credErr) {
+		writeError(w, http.StatusInternalServerError, "failed to look up credentials")
+		return
+	}
+
+	if hadPassword {
+		if req.CurrentPassword == nil {
+			writeError(w, http.StatusBadRequest, "current_password is required")
+			return
+		}
+		current := strings.TrimSpace(*req.CurrentPassword)
+		if current == "" {
+			writeError(w, http.StatusBadRequest, "current_password is required")
+			return
+		}
+		if isNotFound(credErr) {
+			writeError(w, http.StatusUnauthorized, "current password incorrect")
+			return
+		}
+		hashStored := ""
+		if row.PasswordHash.Valid {
+			hashStored = strings.TrimSpace(row.PasswordHash.String)
+		}
+		if hashStored == "" || !auth.PasswordMatches(hashStored, current) {
+			writeError(w, http.StatusUnauthorized, "current password incorrect")
+			return
+		}
+	}
+
+	hashBytes, err := auth.HashPassword(newPassword)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to hash password")
+		return
+	}
+
+	if err := h.Queries.SetUserPasswordHash(ctx, db.SetUserPasswordHashParams{
+		ID:           uid,
+		PasswordHash: pgtype.Text{String: hashBytes, Valid: true},
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update password")
+		return
+	}
+
+	refreshed, err := h.Queries.GetUser(ctx, uid)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+	out, err := h.marshalUser(ctx, refreshed)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

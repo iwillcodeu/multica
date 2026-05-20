@@ -271,3 +271,111 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 	)
 	return i, err
 }
+
+const isDisplayNameTaken = `-- name: IsDisplayNameTaken :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim($1::text))
+) AS taken
+`
+
+func (q *Queries) IsDisplayNameTaken(ctx context.Context, checkName string) (bool, error) {
+	row := q.db.QueryRow(ctx, isDisplayNameTaken, checkName)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
+const setUserPasswordHash = `-- name: SetUserPasswordHash :exec
+UPDATE "user" SET password_hash = $2, updated_at = now() WHERE id = $1
+`
+
+type SetUserPasswordHashParams struct {
+	ID           pgtype.UUID `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error {
+	_, err := q.db.Exec(ctx, setUserPasswordHash, arg.ID, arg.PasswordHash)
+	return err
+}
+
+const getUserCredentialsByEmail = `-- name: GetUserCredentialsByEmail :one
+SELECT id, password_hash FROM "user"
+WHERE email = $1
+`
+
+type GetUserCredentialsByEmailRow struct {
+	ID           pgtype.UUID `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+func (q *Queries) GetUserCredentialsByEmail(ctx context.Context, email string) (GetUserCredentialsByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getUserCredentialsByEmail, email)
+	var i GetUserCredentialsByEmailRow
+	err := row.Scan(&i.ID, &i.PasswordHash)
+	return i, err
+}
+
+const isUserPasswordConfigured = `-- name: IsUserPasswordConfigured :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE id = $1 AND password_hash IS NOT NULL AND btrim(password_hash) <> ''
+)
+`
+
+func (q *Queries) IsUserPasswordConfigured(ctx context.Context, id pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isUserPasswordConfigured, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const updateUserName = `-- name: UpdateUserName :one
+UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+`
+
+type UpdateUserNameParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserName, arg.ID, arg.Name)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+	)
+	return i, err
+}
+
+const isDisplayNameTakenByOther = `-- name: IsDisplayNameTakenByOther :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim($1::text))
+    AND id <> $2
+) AS taken
+`
+
+type IsDisplayNameTakenByOtherParams struct {
+	CheckName string      `json:"check_name"`
+	ExcludeID pgtype.UUID `json:"exclude_id"`
+}
+
+func (q *Queries) IsDisplayNameTakenByOther(ctx context.Context, arg IsDisplayNameTakenByOtherParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isDisplayNameTakenByOther, arg.CheckName, arg.ExcludeID)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}

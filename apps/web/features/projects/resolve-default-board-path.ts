@@ -1,7 +1,10 @@
-import { useAuthStore } from "@/features/auth/store";
-import { useWorkspaceStore } from "@/features/workspace/store";
-import { loadPersonalProjectTabOrder, orderProjectsByPersonalPreference } from "./personal-project-tab-order";
-import { useProjectStore } from "./store";
+import { useAuthStore } from "@multica/core/auth";
+import { getCurrentWsId } from "@multica/core/platform";
+import {
+  loadPersonalProjectTabOrder,
+  orderProjectsByPersonalPreference,
+  useProjectStore,
+} from "@multica/core/projects";
 
 /** True when `next` means the projects hub without a selected project tab. */
 function isProjectsIndexPath(next: string): boolean {
@@ -29,7 +32,7 @@ export function resolveDefaultBoardPath(nextSearchParam: string | null): string 
   }
 
   const userId = useAuthStore.getState().user?.id ?? "";
-  const workspaceId = useWorkspaceStore.getState().workspace?.id ?? "";
+  const workspaceId = getCurrentWsId() ?? "";
   const projects = useProjectStore.getState().projects;
   const ordered = orderProjectsByPersonalPreference(
     projects,

@@ -1,1 +1,5 @@
-export { InboxPage as default } from "@multica/views/inbox";
+import { InboxPage } from "@multica/views/inbox";
+
+export default function Page() {
+  return <InboxPage />;
+}

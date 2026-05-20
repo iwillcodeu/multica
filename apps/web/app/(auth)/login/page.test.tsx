@@ -24,18 +24,21 @@ function createWrapper() {
 const {
   mockSendCode,
   mockVerifyCode,
+  mockLoginWithPassword,
   mockIssueCliToken,
   searchParamsState,
   authStateRef,
 } = vi.hoisted(() => ({
   mockSendCode: vi.fn(),
   mockVerifyCode: vi.fn(),
+  mockLoginWithPassword: vi.fn(),
   mockIssueCliToken: vi.fn(),
   searchParamsState: { params: new URLSearchParams() },
   authStateRef: {
     state: {
       sendCode: vi.fn(),
       verifyCode: vi.fn(),
+      loginWithPassword: vi.fn(),
       user: null as null | { id: string; email: string },
       isLoading: false,
     },
@@ -60,6 +63,7 @@ vi.mock("@multica/core/auth", async () => {
     );
   authStateRef.state.sendCode = mockSendCode;
   authStateRef.state.verifyCode = mockVerifyCode;
+  authStateRef.state.loginWithPassword = mockLoginWithPassword;
   const useAuthStore = Object.assign(
     (selector: (s: typeof authStateRef.state) => unknown) =>
       selector(authStateRef.state),
@@ -78,7 +82,6 @@ vi.mock("@multica/core/api", () => ({
   api: {
     listWorkspaces: vi.fn().mockResolvedValue([]),
     verifyCode: vi.fn(),
-    loginPassword: vi.fn(),
     setToken: vi.fn(),
     getMe: vi.fn(),
     issueCliToken: mockIssueCliToken,
@@ -95,11 +98,27 @@ describe("LoginPage", () => {
     authStateRef.state.isLoading = false;
   });
 
-  it("renders login form with email input and continue button", () => {
+  it("renders email-code step by default and tab switchers", () => {
     render(<LoginPage />, { wrapper: createWrapper() });
 
     expect(screen.getByText("Sign in to Multica")).toBeInTheDocument();
-    expect(screen.getByText("Enter your email to get a login code")).toBeInTheDocument();
+    expect(
+      screen.getByText("Enter your email to get a login code"),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue with email" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Email code" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Password" })).toBeInTheDocument();
+  });
+
+  it("password tab shows password sign-in controls", async () => {
+    const user = userEvent.setup();
+    render(<LoginPage />, { wrapper: createWrapper() });
+
+    await user.click(screen.getByRole("button", { name: "Password" }));
+    expect(
+      screen.getByText(/Sign in with the email and password for your existing account/),
+    ).toBeInTheDocument();
     expect(screen.getByLabelText("Email")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();

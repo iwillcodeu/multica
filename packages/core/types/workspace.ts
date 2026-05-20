@@ -51,6 +51,8 @@ export interface User {
   starter_content_state: string | null;
   /** Preferred UI language. null means "follow client/system". */
   language: string | null;
+  /** True when the server has a bcrypt password set for this account. */
+  has_password?: boolean;
   created_at: string;
   updated_at: string;
 }

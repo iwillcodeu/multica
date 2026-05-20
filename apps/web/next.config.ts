@@ -4,6 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 const webPackageDir = path.dirname(fileURLToPath(import.meta.url));
+/** Monorepo root (contains pnpm-workspace.yaml). Anchors standalone file tracing — without this Next may nest `standalone/Projects/.../apps/web/`. */
+const monorepoRoot = path.resolve(webPackageDir, "../..");
 
 // Load root .env so REMOTE_API_URL is available to next.config.ts
 config({ path: path.resolve(webPackageDir, "../../.env") });
@@ -29,7 +31,12 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 const standaloneDeploy = process.env.MULTICA_STANDALONE_DEPLOY === "1";
 
 const nextConfig: NextConfig = {
-  ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
+  ...(process.env.STANDALONE === "true"
+    ? {
+        output: "standalone" as const,
+        outputFileTracingRoot: monorepoRoot,
+      }
+    : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }

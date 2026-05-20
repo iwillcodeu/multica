@@ -2,16 +2,16 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "../hooks";
+import { useCurrentMember } from "../permissions/use-current-member";
+import { useCurrentWorkspace } from "../paths";
+import type { MemberRole, MemberWithUser } from "../types";
 import { memberListOptions, agentListOptions } from "./queries";
 
 /** Current user's membership in the active workspace, if any. */
 export function useCurrentWorkspaceMember(): MemberWithUser | null {
-  const userId = useAuthStore((s) => s.user?.id);
-  const members = useWorkspaceStore((s) => s.members);
-  return useMemo(
-    () => members.find((m) => m.user_id === userId) ?? null,
-    [members, userId],
-  );
+  const wsId = useCurrentWorkspace()?.id ?? "";
+  const { member } = useCurrentMember(wsId);
+  return member;
 }
 
 export function canCreateOrRenameProjects(role: MemberRole | undefined): boolean {

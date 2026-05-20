@@ -77,6 +77,8 @@
     "./query-client": "./query-client.ts",
     "./provider": "./provider.tsx",
     "./logger": "./logger.ts",
+    "./random-id": "./random-id.ts",
+    "./display-name": "./display-name.ts",
     "./utils": "./utils.ts",
     "./constants/*": "./constants/*.ts",
     "./platform": "./platform/index.ts",

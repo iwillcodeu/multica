@@ -2,8 +2,8 @@
 
 import { use, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { MyIssuesPage } from "@/features/my-issues";
-import { useProjectStore } from "@/features/projects";
+import { MyIssuesPage } from "@multica/views/my-issues";
+import { useProjectStore } from "@multica/core/projects";
 
 export default function MyIssuesProjectPage({
   params,
@@ -14,6 +14,10 @@ export default function MyIssuesProjectPage({
   const router = useRouter();
   const projects = useProjectStore((s) => s.projects);
   const loading = useProjectStore((s) => s.loading);
+
+  useEffect(() => {
+    void useProjectStore.getState().fetch();
+  }, []);
 
   useEffect(() => {
     if (loading) return;

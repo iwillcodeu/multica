@@ -1,4 +1,4 @@
-import type { IssueCategory } from "@/shared/types";
+import type { IssueCategory } from "../../types/issue";
 
 export const ISSUE_CATEGORIES: IssueCategory[] = ["bug", "feature", "task"];
 

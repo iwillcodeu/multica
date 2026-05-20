@@ -40,6 +40,7 @@ const baseIssue: Issue = {
   description: null,
   status: "todo",
   priority: "none",
+  category: "task",
   assignee_type: null,
   assignee_id: null,
   creator_type: "member",

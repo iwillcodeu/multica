@@ -1,6 +1,6 @@
 "use client";
 
-import { MyIssuesProjectTabsRail } from "@/features/my-issues/components/my-issues-project-tabs-rail";
+import { MyIssuesProjectTabsRail } from "@multica/views/my-issues";
 
 export default function MyIssuesLayout({
   children,

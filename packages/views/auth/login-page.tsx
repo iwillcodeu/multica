@@ -115,6 +115,9 @@ export function LoginPage({
   const [loading, setLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [existingUser, setExistingUser] = useState<User | null>(null);
+  type LoginTab = "password" | "email_code";
+  const [loginTab, setLoginTab] = useState<LoginTab>("email_code");
+  const [password, setPassword] = useState("");
   // Tracks how the existing session was detected so handleCliAuthorize
   // uses the matching token source (cookie → issueCliToken, localStorage → direct).
   const authSourceRef = useRef<"cookie" | "localStorage">("cookie");
@@ -187,6 +190,43 @@ export function LoginPage({
       }
     },
     [email, t],
+  );
+
+  const submitPasswordLogin = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (!email) {
+        setError(t(($) => $.common.email_required));
+        return;
+      }
+      const pw = password.trim();
+      if (!pw) {
+        setError(t(($) => $.errors.password_required));
+        return;
+      }
+      if (cliCallback) {
+        setError(t(($) => $.errors.cli_password_unsupported));
+        return;
+      }
+      setLoading(true);
+      setError("");
+      try {
+        await useAuthStore.getState().loginWithPassword(email, pw);
+        const wsList = await api.listWorkspaces();
+        qc.setQueryData(workspaceKeys.list(), wsList);
+        onTokenObtained?.();
+        onSuccess();
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : t(($) => $.errors.password_login_failed),
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [email, password, cliCallback, onSuccess, onTokenObtained, qc, t],
   );
 
   const handleVerify = useCallback(
@@ -410,44 +450,144 @@ export function LoginPage({
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           {logo && <div className="mx-auto mb-4">{logo}</div>}
+          {!cliCallback && (
+            <div className="mx-auto mb-6 grid w-full grid-cols-2 gap-1 rounded-lg bg-muted p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginTab("password");
+                  setError("");
+                }}
+                className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${
+                  loginTab === "password"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t(($) => $.signin.tab_password)}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginTab("email_code");
+                  setError("");
+                }}
+                className={`rounded-md px-2 py-2 text-xs font-medium transition-colors ${
+                  loginTab === "email_code"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {t(($) => $.signin.tab_email_code)}
+              </button>
+            </div>
+          )}
           <CardTitle className="text-2xl">
             {t(($) => $.signin.title)}
           </CardTitle>
           <CardDescription>
-            {t(($) => $.signin.description)}
+            {loginTab === "password" && !cliCallback
+              ? t(($) => $.signin.password_description)
+              : t(($) => $.signin.description)}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="login-email">{t(($) => $.common.email)}</Label>
-              <Input
-                id="login-email"
-                type="email"
-                placeholder={t(($) => $.common.email_placeholder)}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                autoFocus
-                required
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-          </form>
+          {cliCallback ? (
+            <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="login-email">{t(($) => $.common.email)}</Label>
+                <Input
+                  id="login-email"
+                  type="email"
+                  placeholder={t(($) => $.common.email_placeholder)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          ) : loginTab === "password" ? (
+            <form id="pwd-form" onSubmit={submitPasswordLogin} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="login-email">{t(($) => $.common.email)}</Label>
+                <Input
+                  id="login-email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder={t(($) => $.common.email_placeholder)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="login-password">{t(($) => $.signin.password_field)}</Label>
+                <Input
+                  id="login-password"
+                  type="password"
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          ) : (
+            <form id="login-form" onSubmit={handleSendCode} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="login-email-code">{t(($) => $.common.email)}</Label>
+                <Input
+                  id="login-email-code"
+                  type="email"
+                  placeholder={t(($) => $.common.email_placeholder)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          )}
         </CardContent>
         <CardFooter className="flex flex-col gap-3">
-          <Button
-            type="submit"
-            form="login-form"
-            className="w-full"
-            size="lg"
-            disabled={!email || loading}
-          >
-            {loading
-              ? t(($) => $.signin.sending)
-              : t(($) => $.signin.continue)}
-          </Button>
+          {cliCallback ? (
+            <Button
+              type="submit"
+              form="login-form"
+              className="w-full"
+              size="lg"
+              disabled={!email || loading}
+            >
+              {loading ? t(($) => $.signin.sending) : t(($) => $.signin.continue)}
+            </Button>
+          ) : loginTab === "password" ? (
+            <Button
+              type="submit"
+              form="pwd-form"
+              className="w-full"
+              size="lg"
+              disabled={!email.trim() || !password.trim() || loading}
+            >
+              {loading
+                ? t(($) => $.signin.sending)
+                : t(($) => $.signin.sign_in_password)}
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              form="login-form"
+              className="w-full"
+              size="lg"
+              disabled={!email || loading}
+            >
+              {loading ? t(($) => $.signin.sending) : t(($) => $.signin.continue_email)}
+            </Button>
+          )}
           {(google || onGoogleLogin) && (
             <>
               <div className="relative w-full">

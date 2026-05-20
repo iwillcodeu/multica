@@ -25,6 +25,10 @@ rsync -az \
   "${HOST}:${REMOTE}/server/bin/"
 ssh "$HOST" "chmod +x ${REMOTE}/server/bin/server ${REMOTE}/server/bin/migrate"
 
+echo "==> Sync scripts/deploy (dotenv-export for migrate)"
+ssh "$HOST" "mkdir -p ${REMOTE}/scripts/deploy"
+rsync -az "${ROOT}/scripts/deploy/dotenv-export.sh" "${HOST}:${REMOTE}/scripts/deploy/"
+
 if [[ "${NO_MIGRATE:-0}" != "1" ]]; then
   echo "==> migrate up on ${HOST}"
   # migrate resolves migrations/ relative to cwd; must run from server/ (see server/cmd/migrate/main.go).

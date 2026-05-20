@@ -84,15 +84,27 @@ func NewS3StorageFromEnv() *S3Storage {
 	}
 
 	cdnDomain := os.Getenv("CLOUDFRONT_DOMAIN")
-	endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
+	customEndpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
 	pathStyle := os.Getenv("S3_USE_PATH_STYLE") == "1" || strings.EqualFold(os.Getenv("S3_USE_PATH_STYLE"), "true")
 
-	endpointURL := os.Getenv("AWS_ENDPOINT_URL")
+	endpointURL := strings.TrimSpace(os.Getenv("AWS_ENDPOINT_URL"))
+	if endpointURL == "" {
+		endpointURL = customEndpoint
+	}
+	// S3-compatible backends (e.g. Aliyun OSS) often reject AWS SDK's
+	// checksum/chunked transfer mode used for PutObject by default.
+	// Restrict checksum handling to "required only" when a custom endpoint
+	// is configured so uploads stay compatible.
+	if endpointURL != "" {
+		cfg.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		cfg.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
+	}
+
 	s3Opts := []func(*s3.Options){}
 	if endpointURL != "" {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(endpointURL)
-			o.UsePathStyle = true
+			o.UsePathStyle = pathStyle
 		})
 	}
 

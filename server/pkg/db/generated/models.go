@@ -260,6 +260,7 @@ type Issue struct {
 	Description        pgtype.Text        `json:"description"`
 	Status             string             `json:"status"`
 	Priority           string             `json:"priority"`
+	Category           string             `json:"category"`
 	AssigneeType       pgtype.Text        `json:"assignee_type"`
 	AssigneeID         pgtype.UUID        `json:"assignee_id"`
 	CreatorType        string             `json:"creator_type"`

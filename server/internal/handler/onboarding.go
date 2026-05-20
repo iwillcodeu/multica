@@ -114,7 +114,12 @@ func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 		))
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(user))
+	payload, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 type patchOnboardingRequest struct {
@@ -194,7 +199,12 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 		))
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(user))
+	payload, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 type joinCloudWaitlistRequest struct {
@@ -256,7 +266,12 @@ func (h *Handler) JoinCloudWaitlist(w http.ResponseWriter, r *http.Request) {
 
 	h.Analytics.Capture(analytics.CloudWaitlistJoined(userID, reason != ""))
 
-	writeJSON(w, http.StatusOK, userToResponse(user))
+	payload, err := h.marshalUser(r.Context(), user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // -----------------------------------------------------------------------------
@@ -616,8 +631,13 @@ func (h *Handler) ImportStarterContent(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Analytics.Capture(analytics.StarterContentDecided(userID, req.WorkspaceID, "imported", starterBranch))
 
+	ur, err := h.marshalUser(r.Context(), updatedUser)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
 	writeJSON(w, http.StatusOK, importStarterContentResponse{
-		User:           userToResponse(updatedUser),
+		User:           ur,
 		ProjectID:      uuidToString(project.ID),
 		WelcomeIssueID: welcomeIssueID,
 	})
@@ -701,7 +721,12 @@ func (h *Handler) DismissStarterContent(w http.ResponseWriter, r *http.Request) 
 
 	h.Analytics.Capture(analytics.StarterContentDecided(userID, req.WorkspaceID, "dismissed", branch))
 
-	writeJSON(w, http.StatusOK, userToResponse(updated))
+	payload, err := h.marshalUser(r.Context(), updated)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user flags")
+		return
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // strOrNullText converts an empty-meaning-absent string into a

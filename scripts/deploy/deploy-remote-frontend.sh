@@ -36,13 +36,18 @@ source "${ROOT}/scripts/deploy/dotenv-export.sh"
 dotenv_export "$ENV_FILE"
 
 export MULTICA_STANDALONE_DEPLOY=1
+# next.config.ts only enables output: standalone when STANDALONE=true (matches Dockerfile.web).
+export STANDALONE=true
 export NEXT_TELEMETRY_DISABLED=1
+# Desktop uses Electron — its postinstall downloads a ~100MB binary. Web deploy does not need it;
+# skip download so flaky networks / proxies do not fail the whole install.
+export ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
-echo "==> pnpm install (sync lockfile → node_modules; avoids missing TipTap etc. after pull)"
+echo "==> pnpm install (sync lockfile; Electron binary download skipped)"
 pnpm install --frozen-lockfile
 
-echo "==> pnpm build (standalone)"
-pnpm build
+echo "==> turbo build (standalone): @multica/web only (skip Electron desktop app build)"
+pnpm exec turbo run build --filter="@multica/web..."
 
 if [[ ! -f "${STAND}/apps/web/server.js" ]]; then
   echo "Missing ${STAND}/apps/web/server.js" >&2

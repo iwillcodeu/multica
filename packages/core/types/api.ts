@@ -1,7 +1,6 @@
-import type { Issue, IssueStatus, IssuePriority, IssueCategory, IssueAssigneeType } from "./issue";
+import type { Issue, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
 import type { Project } from "./project";
 import type { MemberRole } from "./workspace";
-import type { Project } from "./project";
 
 // Issue API
 export interface CreateIssueRequest {

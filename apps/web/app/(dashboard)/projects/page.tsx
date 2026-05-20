@@ -2,9 +2,9 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { MulticaIcon } from "@/components/multica-icon";
-import { Button } from "@/components/ui/button";
-import { canCreateOrRenameProjects, useCurrentWorkspaceMember } from "@/features/workspace";
+import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { Button } from "@multica/ui/components/ui/button";
+import { canCreateOrRenameProjects, useCurrentWorkspaceMember } from "@multica/core/workspace/hooks";
 import { usePersonalProjectTabOrder, useProjectStore } from "@/features/projects";
 
 export default function ProjectsIndexPage() {
@@ -15,6 +15,10 @@ export default function ProjectsIndexPage() {
   const member = useCurrentWorkspaceMember();
   const canCreate = canCreateOrRenameProjects(member?.role);
   const orderedProjects = usePersonalProjectTabOrder(projects);
+
+  useEffect(() => {
+    void useProjectStore.getState().fetch();
+  }, []);
 
   useEffect(() => {
     if (loading) return;

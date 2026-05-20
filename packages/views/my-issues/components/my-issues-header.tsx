@@ -37,11 +37,14 @@ import {
 import { Switch } from "@multica/ui/components/ui/switch";
 import {
   ALL_STATUSES,
+  CATEGORY_CONFIG,
+  ISSUE_CATEGORIES,
   STATUS_CONFIG,
   PRIORITY_ORDER,
   PRIORITY_CONFIG,
 } from "@multica/core/issues/config";
 import { StatusIcon, PriorityIcon } from "../../issues/components";
+import { CategoryIcon } from "../../issues/components/category-icon";
 import {
   SORT_OPTIONS,
   CARD_PROPERTY_OPTIONS,
