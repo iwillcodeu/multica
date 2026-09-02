@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import type { RuntimeUsage } from "@multica/core/types";
-import { estimateCost } from "../../utils";
-import { useT } from "../../../i18n";
+import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
+import { addDaysIso, estimateCost, formatUsd, todayIso, weekStartIso } from "../../utils";
+import { useLocale, useT } from "../../../i18n";
 
 // 26 weeks (~6 months) gives the heatmap real presence in the wider chart
 // card and turns "long-view" into a meaningful tab — a 13-week strip looked
@@ -10,8 +11,13 @@ import { useT } from "../../../i18n";
 const HEATMAP_WEEKS = 26;
 const CELL_SIZE = 16;
 const CELL_GAP = 3;
-const DAY_LABELS = ["", "Mon", "", "Wed", "", "Fri", ""];
-const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+// Monday-first row order, matching ISO 8601 and the rest of the Weekly
+// aggregation (see #MUL-2382). Labelling alternating rows keeps the density
+// readable without tying the chart structure to one language.
+const LABELED_WEEKDAY_INDICES = new Set([0, 2, 4]);
+// 2026-01-05 is a Monday, so walking 7 days from here lines the formatted
+// names up with the Monday-first `dayOfWeek` index.
+const WEEKDAY_ANCHOR = Date.UTC(2026, 0, 5);
 
 // Cells use the brand-derived chart-1 hue with descending opacity instead
 // of a neutral foreground fade, so the heatmap reads as part of the same
@@ -24,30 +30,50 @@ function getHeatmapColor(level: number): string {
   return `color-mix(in oklch, var(--color-chart-1) ${opacities[level - 1]}, transparent)`;
 }
 
-function fmtMoney(n: number): string {
-  if (n >= 100) return `$${n.toFixed(0)}`;
-  return `$${n.toFixed(2)}`;
-}
-
-function fmtDate(iso: string): string {
-  return new Date(iso + "T00:00:00").toLocaleString("en", {
+function fmtDate(iso: string, locale: string): string {
+  return new Date(iso + "T00:00:00").toLocaleString(locale, {
     month: "short",
     day: "numeric",
   });
 }
 
+// Row labels come from Intl rather than the locale bundle: for every locale
+// we ship, its short weekday names are exactly the strings we would hand-
+// translate, and the month labels below already resolve the same way. One
+// less set of strings to keep in sync when a locale is added.
+function fmtWeekdays(locale: string): string[] {
+  const fmt = new Intl.DateTimeFormat(locale, {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+  return Array.from({ length: 7 }, (_, i) =>
+    fmt.format(new Date(WEEKDAY_ANCHOR + i * 86_400_000)),
+  );
+}
+
 interface Insights {
   busiestDay: { date: string; cost: number } | null;
-  busyDayName: string | null;
+  busyDayIndex: number | null;
   busyDayAvg: number;
-  quietDayName: string | null;
+  quietDayIndex: number | null;
   quietDayAvg: number;
   totalCost: number;
   windowDays: number;
 }
 
-export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
+export function ActivityHeatmap({
+  usage,
+  tz,
+}: {
+  usage: RuntimeUsage[];
+  tz: string;
+}) {
   const { t } = useT("runtimes");
+  const locale = useLocale();
+  const weekdayLabels = useMemo(() => fmtWeekdays(locale), [locale]);
+  // Memo dep — estimateCost (called inside the body below) consults the
+  // user-override store, so saving a custom rate must invalidate the cells.
+  const pricings = useCustomPricingStore((s) => s.pricings);
   const { cells, monthLabels, insights } = useMemo(() => {
     // Sum priced cost per day. Cost (not tokens) gives the colour scale a
     // financial meaning that lines up with the rest of the page — a "hot"
@@ -57,22 +83,32 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
       dateCost.set(u.date, (dateCost.get(u.date) ?? 0) + estimateCost(u));
     }
 
-    const today = new Date();
-    const todayDay = today.getDay();
-    const startOffset = todayDay + (HEATMAP_WEEKS - 1) * 7;
-    const startDate = new Date(today);
-    startDate.setDate(today.getDate() - startOffset);
+    // Anchor the grid on the Monday of the week containing "today" in the
+    // viewer's tz, then walk back HEATMAP_WEEKS-1 weeks. All dates are
+    // string-based YYYY-MM-DD so the host browser's tz can't shift a column.
+    // We stop drawing cells once we pass `today` so the in-progress week is
+    // partial (cells for "tomorrow onward" aren't rendered) — matches the
+    // Weekly chart's partial-week treatment.
+    const today = todayIso(tz);
+    const lastWeekStart = weekStartIso(today);
+    const startDate = addDaysIso(lastWeekStart, -(HEATMAP_WEEKS - 1) * 7);
+    const todayIndex = (HEATMAP_WEEKS - 1) * 7 + ((() => {
+      // Monday-based weekday of `today`: 0 = Mon ... 6 = Sun. Computed via
+      // string subtraction so the host timezone can't shift the value.
+      const [y, m, d] = today.split("-").map(Number);
+      const dt = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1));
+      return (dt.getUTCDay() + 6) % 7;
+    })());
 
     const allCells: {
       date: string;
-      dayOfWeek: number;
+      dayOfWeek: number; // 0 = Mon ... 6 = Sun
       week: number;
       cost: number;
     }[] = [];
-    const d = new Date(startDate);
-    for (let i = 0; i <= startOffset; i++) {
-      const dateStr = d.toISOString().slice(0, 10);
-      const dayOfWeek = d.getDay();
+    for (let i = 0; i <= todayIndex; i++) {
+      const dateStr = addDaysIso(startDate, i);
+      const dayOfWeek = i % 7;
       const week = Math.floor(i / 7);
       allCells.push({
         date: dateStr,
@@ -80,7 +116,6 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
         week,
         cost: dateCost.get(dateStr) ?? 0,
       });
-      d.setDate(d.getDate() + 1);
     }
 
     const nonZero = allCells.filter((c) => c.cost > 0).map((c) => c.cost);
@@ -106,7 +141,7 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
       const month = new Date(c.date + "T00:00:00").getMonth();
       if (month !== lastMonth && c.dayOfWeek === 0) {
         months.push({
-          label: new Date(c.date + "T00:00:00").toLocaleString("en", {
+          label: new Date(c.date + "T00:00:00").toLocaleString(locale, {
             month: "short",
           }),
           week: c.week,
@@ -133,41 +168,40 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
       const count = weekdayCount[i] ?? 0;
       return count > 0 ? s / count : 0;
     });
-    let busyDayName: string | null = null;
+    let busyDayIndex: number | null = null;
     let busyDayAvg = 0;
-    let quietDayName: string | null = null;
+    let quietDayIndex: number | null = null;
     let quietDayAvg = Number.POSITIVE_INFINITY;
     weekdayAvg.forEach((avg, i) => {
-      const name = WEEKDAY_NAMES[i] ?? "";
       if (avg > busyDayAvg) {
         busyDayAvg = avg;
-        busyDayName = name;
+        busyDayIndex = i;
       }
       if (avg < quietDayAvg) {
         quietDayAvg = avg;
-        quietDayName = name;
+        quietDayIndex = i;
       }
     });
     if (quietDayAvg === Number.POSITIVE_INFINITY) quietDayAvg = 0;
     // When the window has no spend at all, the busy / quiet weekday picks
     // are noise (every weekday averaged to 0). Suppress them.
     if (totalCost === 0) {
-      busyDayName = null;
-      quietDayName = null;
+      busyDayIndex = null;
+      quietDayIndex = null;
     }
 
     const insights: Insights = {
       busiestDay,
-      busyDayName,
+      busyDayIndex,
       busyDayAvg,
-      quietDayName,
+      quietDayIndex,
       quietDayAvg,
       totalCost,
       windowDays: allCells.length,
     };
 
     return { cells: cellsWithLevel, monthLabels: months, insights };
-  }, [usage]);
+  }, [usage, pricings, tz, locale]);
 
   const labelWidth = 28;
   const svgWidth = labelWidth + HEATMAP_WEEKS * (CELL_SIZE + CELL_GAP);
@@ -194,8 +228,8 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
                 {m.label}
               </text>
             ))}
-            {DAY_LABELS.map((label, i) =>
-              label ? (
+            {weekdayLabels.map((label, i) =>
+              LABELED_WEEKDAY_INDICES.has(i) ? (
                 <text
                   key={i}
                   x={0}
@@ -218,15 +252,21 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
                 fill={getHeatmapColor(c.level)}
                 className="transition-colors"
               >
+                {/* The tooltip date stays ISO on purpose: it is the exact
+                    day key behind the cell, and readers compare it against
+                    the API / CLI usage rows, which are ISO too. Only the
+                    prose around it is translated. */}
                 <title>
                   {c.date}:{" "}
-                  {c.cost > 0 ? `$${c.cost.toFixed(2)}` : "No activity"}
+                  {c.cost > 0
+                    ? `$${c.cost.toFixed(2)}`
+                    : t(($) => $.charts.heatmap_no_activity)}
                 </title>
               </rect>
             ))}
           </svg>
         </div>
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+        <div className="flex items-center gap-1 text-micro text-muted-foreground">
           <span>{t(($) => $.charts.heatmap_less)}</span>
           {[0, 1, 2, 3, 4].map((level) => (
             <div
@@ -239,7 +279,11 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
         </div>
       </div>
 
-      <InsightsRow insights={insights} />
+      <InsightsRow
+        insights={insights}
+        locale={locale}
+        weekdayLabels={weekdayLabels}
+      />
     </div>
   );
 }
@@ -247,12 +291,21 @@ export function ActivityHeatmap({ usage }: { usage: RuntimeUsage[] }) {
 // Horizontal stat strip beneath the heatmap. Mirrors the page-top KPI
 // hero pattern (label → big value → sub) but at smaller scale to stay
 // secondary. 4 columns on desktop, 2 on narrow screens.
-function InsightsRow({ insights }: { insights: Insights }) {
+function InsightsRow({
+  insights,
+  locale,
+  weekdayLabels,
+}: {
+  insights: Insights;
+  locale: string;
+  weekdayLabels: string[];
+}) {
+  const { t } = useT("runtimes");
   const {
     busiestDay,
-    busyDayName,
+    busyDayIndex,
     busyDayAvg,
-    quietDayName,
+    quietDayIndex,
     quietDayAvg,
     totalCost,
     windowDays,
@@ -260,21 +313,32 @@ function InsightsRow({ insights }: { insights: Insights }) {
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 sm:grid-cols-4">
       <Insight
-        label="Busiest day"
-        value={busiestDay ? fmtDate(busiestDay.date) : "—"}
-        sub={busiestDay ? fmtMoney(busiestDay.cost) : null}
+        label={t(($) => $.charts.heatmap_busiest_day)}
+        value={busiestDay ? fmtDate(busiestDay.date, locale) : "—"}
+        sub={busiestDay ? formatUsd(busiestDay.cost) : null}
       />
       <Insight
-        label="Most active weekday"
-        value={busyDayName ?? "—"}
-        sub={busyDayName ? `avg ${fmtMoney(busyDayAvg)}` : null}
+        label={t(($) => $.charts.heatmap_most_active_weekday)}
+        value={
+          busyDayIndex === null ? "—" : (weekdayLabels[busyDayIndex] ?? "—")
+        }
+        sub={busyDayIndex !== null
+          ? t(($) => $.charts.heatmap_average, { value: formatUsd(busyDayAvg) })
+          : null}
       />
       <Insight
-        label="Quietest weekday"
-        value={quietDayName ?? "—"}
-        sub={quietDayName ? `avg ${fmtMoney(quietDayAvg)}` : null}
+        label={t(($) => $.charts.heatmap_quietest_weekday)}
+        value={
+          quietDayIndex === null ? "—" : (weekdayLabels[quietDayIndex] ?? "—")
+        }
+        sub={quietDayIndex !== null
+          ? t(($) => $.charts.heatmap_average, { value: formatUsd(quietDayAvg) })
+          : null}
       />
-      <Insight label={`${windowDays}-day total`} value={fmtMoney(totalCost)} />
+      <Insight
+        label={t(($) => $.charts.heatmap_window_total, { count: windowDays })}
+        value={formatUsd(totalCost)}
+      />
     </dl>
   );
 }
@@ -290,13 +354,13 @@ function Insight({
 }) {
   return (
     <div className="min-w-0">
-      <dt className="truncate text-[11px] uppercase tracking-wider text-muted-foreground">
+      <dt className="truncate text-micro uppercase tracking-wider text-muted-foreground">
         {label}
       </dt>
-      <dd className="mt-0.5 truncate text-sm font-medium tabular-nums">
+      <dd className="mt-0.5 truncate text-body font-medium tabular-nums">
         {value}
         {sub != null && (
-          <span className="ml-1.5 text-xs font-normal text-muted-foreground">
+          <span className="ml-1.5 text-caption font-normal text-muted-foreground">
             {sub}
           </span>
         )}

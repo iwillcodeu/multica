@@ -9,6 +9,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -31,10 +32,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 		}
 
 		activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+			ID:          dbid.NewV7(),
 			WorkspaceID: parseUUID(issue.WorkspaceID),
 			IssueID:     parseUUID(issue.ID),
 			ActorType:   util.StrToText(e.ActorType),
-			ActorID:     parseUUID(e.ActorID),
+			ActorID:     optionalUUID(e.ActorID),
 			Action:      "created",
 			Details:     []byte("{}"),
 		})
@@ -70,10 +72,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Status,
 			})
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "status_changed",
 				Details:     details,
 			})
@@ -92,10 +95,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Priority,
 			})
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "priority_changed",
 				Details:     details,
 			})
@@ -127,15 +131,46 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 
 			details, _ := json.Marshal(detailsMap)
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "assignee_changed",
 				Details:     details,
 			})
 			if err != nil {
 				slog.Error("activity: failed to record assignee change",
+					"issue_id", issue.ID, "error", err)
+			} else {
+				publishActivityEvent(bus, e, activity)
+			}
+		}
+
+		if startDateChanged, _ := payload["start_date_changed"].(bool); startDateChanged {
+			prevStartDate := ""
+			if v, ok := payload["prev_start_date"].(*string); ok && v != nil {
+				prevStartDate = *v
+			}
+			newStartDate := ""
+			if issue.StartDate != nil {
+				newStartDate = *issue.StartDate
+			}
+			details, _ := json.Marshal(map[string]string{
+				"from": prevStartDate,
+				"to":   newStartDate,
+			})
+			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
+				WorkspaceID: parseUUID(issue.WorkspaceID),
+				IssueID:     parseUUID(issue.ID),
+				ActorType:   util.StrToText(e.ActorType),
+				ActorID:     optionalUUID(e.ActorID),
+				Action:      "start_date_changed",
+				Details:     details,
+			})
+			if err != nil {
+				slog.Error("activity: failed to record start date change",
 					"issue_id", issue.ID, "error", err)
 			} else {
 				publishActivityEvent(bus, e, activity)
@@ -156,10 +191,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   newDueDate,
 			})
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "due_date_changed",
 				Details:     details,
 			})
@@ -178,10 +214,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Title,
 			})
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "title_changed",
 				Details:     details,
 			})
@@ -195,10 +232,11 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 
 		if descriptionChanged {
 			activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+				ID:          dbid.NewV7(),
 				WorkspaceID: parseUUID(issue.WorkspaceID),
 				IssueID:     parseUUID(issue.ID),
 				ActorType:   util.StrToText(e.ActorType),
-				ActorID:     parseUUID(e.ActorID),
+				ActorID:     optionalUUID(e.ActorID),
 				Action:      "description_updated",
 				Details:     []byte("{}"),
 			})
@@ -243,6 +281,7 @@ func handleTaskActivity(ctx context.Context, bus *events.Bus, queries *db.Querie
 	}
 
 	activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+		ID:          dbid.NewV7(),
 		WorkspaceID: issue.WorkspaceID,
 		IssueID:     parseUUID(issueID),
 		ActorType:   util.StrToText("agent"),

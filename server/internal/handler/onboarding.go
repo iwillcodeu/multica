@@ -11,9 +11,9 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/util"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
-	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 // Upper bound on free-text fields. `cloudWaitlistReasonMaxLen` is a
@@ -28,21 +28,18 @@ const (
 	// minimum that keeps the door open for future fields without
 	// letting a malicious user stuff the JSONB column.
 	patchOnboardingBodyLimit = 16 * 1024
-
-	// Import payload contains the full starter-content template. Each
-	// sub-issue's markdown description is ~2 KiB; with ~8 sub-issues,
-	// a welcome issue (~3 KiB), and a project description, 64 KiB is
-	// comfortably above realistic and still bounded.
-	importStarterContentBodyLimit = 64 * 1024
 )
 
 // completeOnboardingRequest carries the client's view of which exit the
-// user took from the flow. The client is the only place that knows
-// whether Step 3's runtime connect was skipped, whether the cloud
-// waitlist form was submitted, or whether Welcome's "I've done this
-// before" path was used. Unknown/missing → OnboardingPathUnknown so
-// legacy clients still complete the flow cleanly, just without a
-// funnel-ready label.
+// user took from the flow. Used purely as an analytics dimension — server
+// state (onboarded_at) flips the same way regardless. Unknown / missing
+// → OnboardingPathUnknown so legacy clients still complete cleanly, just
+// without a funnel-ready label.
+//
+// `workspace_id` is retained for analytics enrichment. The handler itself
+// does not create agents; current runtime-connected clients create their
+// Mika onboarding chat before calling this endpoint. The explicit no-runtime
+// path still seeds one setup guide from the frontend.
 type completeOnboardingRequest struct {
 	CompletionPath string `json:"completion_path,omitempty"`
 	WorkspaceID    string `json:"workspace_id,omitempty"`
@@ -64,6 +61,11 @@ var validCompletionPaths = map[string]struct{}{
 // actually flips `onboarded_at` from NULL. Subsequent calls are still
 // 200 OK (for client-side retries) but skip the event so the funnel
 // counts honest first-completion.
+//
+// Current clients have no in-handler agent-creation side effect. The
+// runtime-connected flow creates Mika and starts its onboarding chat first,
+// while the explicit no-runtime path may create a setup-guide issue after
+// navigation. This handler itself does one thing: flip the field.
 func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -79,20 +81,28 @@ func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Read the prior state so we can detect "was this call the one that
-	// actually completed onboarding?" — MarkUserOnboarded uses COALESCE
-	// and returns the preserved timestamp on repeat calls, which is not
-	// the signal we need for the funnel.
+	// Validate workspace_id if supplied; we don't write with it, but a
+	// malformed value should fail fast rather than silently land in
+	// PostHog as a junk dimension.
+	if req.WorkspaceID != "" {
+		wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
+		if !ok {
+			return
+		}
+		req.WorkspaceID = uuidToString(wsUUID)
+	}
+
 	before, err := h.Queries.GetUser(r.Context(), parseUUID(userID))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
+		writeError(w, http.StatusInternalServerError, "failed to complete onboarding")
 		return
 	}
 	firstCompletion := !before.OnboardedAt.Valid
 
 	user, err := h.Queries.MarkUserOnboarded(r.Context(), parseUUID(userID))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to mark onboarded")
+		slog.Warn("complete onboarding: mark user onboarded failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to complete onboarding")
 		return
 	}
 
@@ -105,7 +115,7 @@ func (h *Handler) CompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 		if user.OnboardedAt.Valid {
 			onboardedAt = user.OnboardedAt.Time.UTC().Format("2006-01-02T15:04:05Z07:00")
 		}
-		h.Analytics.Capture(analytics.OnboardingCompleted(
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingCompleted(
 			userID,
 			req.WorkspaceID,
 			path,
@@ -127,19 +137,83 @@ type patchOnboardingRequest struct {
 }
 
 // questionnaireAnswers mirrors the frontend's `QuestionnaireAnswers`
-// shape. Only the first-time submission — every slot filled — is a
-// funnel signal; partial saves are allowed but never emit.
-type questionnaireAnswers struct {
-	TeamSize      string `json:"team_size"`
-	TeamSizeOther string `json:"team_size_other"`
-	Role          string `json:"role"`
-	RoleOther     string `json:"role_other"`
-	UseCase       string `json:"use_case"`
-	UseCaseOther  string `json:"use_case_other"`
+// shape. `use_case` is multi-select (Step 3 allows picking several);
+// `source` is single-select (primary acquisition channel) but kept
+// as `stringOrSlice` for back-compat with v2 multi-select rows — the
+// client now always commits a one-element array. `role` stays
+// single-select.
+//
+// stringOrSlice also tolerates pre-array rows that wrote a bare
+// string into the JSONB column — `json.Unmarshal` would otherwise
+// fail on type mismatch when reading those back.
+type stringOrSlice []string
+
+func (s *stringOrSlice) UnmarshalJSON(data []byte) error {
+	// Empty / null both decode to nil slice.
+	if len(data) == 0 || string(data) == "null" {
+		*s = nil
+		return nil
+	}
+	// Try array first (current shape).
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*s = arr
+		return nil
+	}
+	// Fall back to single string (pre-array shape from before this
+	// column held a slice). Empty string means "unanswered" — keep nil.
+	var single string
+	if err := json.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	if single == "" {
+		*s = nil
+		return nil
+	}
+	*s = []string{single}
+	return nil
 }
 
+type questionnaireAnswers struct {
+	Source         stringOrSlice `json:"source"`
+	SourceOther    string        `json:"source_other"`
+	SourceSkipped  bool          `json:"source_skipped"`
+	Role           string        `json:"role"`
+	RoleOther      string        `json:"role_other"`
+	RoleSkipped    bool          `json:"role_skipped"`
+	UseCase        stringOrSlice `json:"use_case"`
+	UseCaseOther   string        `json:"use_case_other"`
+	UseCaseSkipped bool          `json:"use_case_skipped"`
+	Version        int           `json:"version"`
+}
+
+func (q questionnaireAnswers) sourceResolved() bool {
+	return len(q.Source) > 0 || q.SourceSkipped
+}
+func (q questionnaireAnswers) roleResolved() bool {
+	return q.Role != "" || q.RoleSkipped
+}
+func (q questionnaireAnswers) useCaseResolved() bool {
+	return len(q.UseCase) > 0 || q.UseCaseSkipped
+}
+
+// questionnaireSchemaVersion is the schema this handler understands.
+// `complete()` and the funnel events are scoped to this version so a
+// future v3 row can't be silently mis-counted against v2 semantics.
+const questionnaireSchemaVersion = 2
+
+// complete covers the IN-FLOW questionnaire only: role + use_case.
+// Source moved out of the onboarding flow (MUL-5159) — it is collected
+// later by the workspace backfill prompt, and its resolution is
+// tracked by the separate `onboarding_source_submitted` emission in
+// PatchOnboarding. Requiring source here would stall the funnel's
+// "questionnaire submitted" step for days (or forever, for users who
+// never see the backfill prompt).
 func (q questionnaireAnswers) complete() bool {
-	return q.TeamSize != "" && q.Role != "" && q.UseCase != ""
+	if q.Version != questionnaireSchemaVersion {
+		return false
+	}
+	return q.roleResolved() && q.useCaseResolved()
 }
 
 // PatchOnboarding persists the user's questionnaire answers. The
@@ -148,9 +222,12 @@ func (q questionnaireAnswers) complete() bool {
 // onboarding entry starts at Welcome.
 //
 // Emits `onboarding_questionnaire_submitted` exactly once per user:
-// the first PATCH that transitions the answers from "at least one
-// slot empty" to "all three filled". Revisions past that point don't
-// re-emit — the funnel counts users, not edits.
+// the first PATCH that transitions role + use_case from "at least one
+// slot empty" to "both resolved". Emits `onboarding_source_submitted`
+// exactly once on the source slot's own unresolved → resolved
+// transition, which normally happens later via the workspace backfill
+// prompt. Revisions past those points don't re-emit — the funnel
+// counts users, not edits.
 func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -171,9 +248,15 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 	// is treated as "incomplete" — worst case we emit once more than
 	// we should, never twice for the same transition.
 	var before questionnaireAnswers
+	beforeRaw := []byte("{}")
 	if beforeUser, err := h.Queries.GetUser(r.Context(), parseUUID(userID)); err == nil {
-		_ = json.Unmarshal(beforeUser.OnboardingQuestionnaire, &before)
+		beforeRaw = beforeUser.OnboardingQuestionnaire
+		_ = json.Unmarshal(beforeRaw, &before)
 	}
+	// firstTouch is true when the user has never written any
+	// onboarding state on the server before this PATCH. Used to fire
+	// onboarding_started exactly once per user from the server side.
+	firstTouch := len(beforeRaw) == 0 || string(beforeRaw) == "null" || string(beforeRaw) == "{}"
 
 	params := db.PatchUserOnboardingParams{ID: parseUUID(userID)}
 	if req.Questionnaire != nil {
@@ -181,21 +264,50 @@ func (h *Handler) PatchOnboarding(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.Queries.PatchUserOnboarding(r.Context(), params)
 	if err != nil {
+		slog.Warn("patch onboarding failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to update onboarding")
 		return
+	}
+
+	// Server-side onboarding_started: fire on the first PATCH that
+	// actually carries a questionnaire payload. The frontend also
+	// emits its own onboarding_started on page open; the two together
+	// let Grafana cross-check the funnel against PostHog.
+	if firstTouch && req.Questionnaire != nil && len(*req.Questionnaire) > 0 && string(*req.Questionnaire) != "{}" {
+		platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingStarted(userID, platform))
 	}
 
 	var after questionnaireAnswers
 	_ = json.Unmarshal(user.OnboardingQuestionnaire, &after)
 	if after.complete() && !before.complete() {
-		h.Analytics.Capture(analytics.OnboardingQuestionnaireSubmitted(
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingQuestionnaireSubmitted(
 			userID,
-			after.TeamSize,
+			[]string(after.Source),
 			after.Role,
-			after.UseCase,
-			after.TeamSizeOther != "",
+			[]string(after.UseCase),
+			after.SourceSkipped,
+			after.RoleSkipped,
+			after.UseCaseSkipped,
+			after.SourceOther != "",
 			after.RoleOther != "",
 			after.UseCaseOther != "",
+		))
+	}
+
+	// Source resolves on its own timeline — typically days after the
+	// in-flow questionnaire, via the workspace backfill prompt (it can
+	// no longer resolve in-flow). Emit on the unresolved → resolved
+	// transition so the backfill prompt's answer/decline rate shows up
+	// in Grafana; the transition check keeps the emission
+	// once-per-user, mirroring the questionnaire event above.
+	if after.Version == questionnaireSchemaVersion &&
+		after.sourceResolved() && !before.sourceResolved() {
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.OnboardingSourceSubmitted(
+			userID,
+			[]string(after.Source),
+			after.SourceSkipped,
+			after.SourceOther != "",
 		))
 	}
 
@@ -264,7 +376,7 @@ func (h *Handler) JoinCloudWaitlist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.Analytics.Capture(analytics.CloudWaitlistJoined(userID, reason != ""))
+	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.CloudWaitlistJoined(userID, reason != ""))
 
 	payload, err := h.marshalUser(r.Context(), user)
 	if err != nil {
@@ -483,6 +595,7 @@ func (h *Handler) ImportStarterContent(w http.ResponseWriter, r *http.Request) {
 			Description:  strOrNullText(req.WelcomeIssueTemplate.Description),
 			Status:       "todo",
 			Priority:     priority,
+			Category:     "task",
 			AssigneeType: pgtype.Text{String: "agent", Valid: true},
 			AssigneeID:   welcomeAgentID,
 			CreatorType:  "member",
@@ -531,6 +644,7 @@ func (h *Handler) ImportStarterContent(w http.ResponseWriter, r *http.Request) {
 			Description:  strOrNullText(sub.Description),
 			Status:       status,
 			Priority:     priority,
+			Category:     "task",
 			AssigneeType: assigneeType,
 			AssigneeID:   assigneeID,
 			CreatorType:  "member",

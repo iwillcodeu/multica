@@ -2,16 +2,32 @@ import type { NextConfig } from "next";
 import { config } from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  resolveDevDocsUrl,
+  resolveDevRemoteApiUrl,
+  resolveDocsUrl,
+  resolveRemoteApiUrl,
+} from "./config/runtime-urls";
+import { createMDX } from "fumadocs-mdx/next";
 
 const webPackageDir = path.dirname(fileURLToPath(import.meta.url));
 /** Monorepo root (contains pnpm-workspace.yaml). Anchors standalone file tracing — without this Next may nest `standalone/Projects/.../apps/web/`. */
 const monorepoRoot = path.resolve(webPackageDir, "../..");
 
-// Load root .env so REMOTE_API_URL is available to next.config.ts
+// Load root .env so local next.config.ts rewrites see REMOTE_API_URL / DOCS_URL.
+// Production requests use proxy.ts runtime rewrites, which read process.env
+// when the Next.js server runs instead of baking these URLs at build time.
 config({ path: path.resolve(webPackageDir, "../../.env") });
 
-const remoteApiUrl = process.env.REMOTE_API_URL || "http://localhost:8080";
-const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
+// `next dev` falls back to the conventional localhost upstreams; builds use
+// the strict resolvers so prebuilt images keep unset upstreams unproxied.
+const isDev = process.env.NODE_ENV === "development";
+const remoteApiUrl = isDev
+  ? resolveDevRemoteApiUrl(process.env)
+  : resolveRemoteApiUrl(process.env);
+const docsUrl = isDev
+  ? resolveDevDocsUrl(process.env)
+  : resolveDocsUrl(process.env);
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
@@ -50,37 +66,55 @@ const nextConfig: NextConfig = {
     return {
       // Run before file-system routes so /docs isn't shadowed by the
       // [workspaceSlug] dynamic segment.
-      beforeFiles: [
-        {
-          source: "/docs",
-          destination: `${docsUrl}/docs`,
-        },
-        {
-          source: "/docs/:path*",
-          destination: `${docsUrl}/docs/:path*`,
-        },
-      ],
-      afterFiles: [
-        {
-          source: "/api/:path*",
-          destination: `${remoteApiUrl}/api/:path*`,
-        },
-        {
-          source: "/ws",
-          destination: `${remoteApiUrl}/ws`,
-        },
-        {
-          source: "/auth/:path*",
-          destination: `${remoteApiUrl}/auth/:path*`,
-        },
-        {
-          source: "/uploads/:path*",
-          destination: `${remoteApiUrl}/uploads/:path*`,
-        },
-      ],
+      beforeFiles: docsUrl
+        ? [
+            {
+              source: "/docs",
+              destination: `${docsUrl}/docs`,
+            },
+            {
+              source: "/docs/:path*",
+              destination: `${docsUrl}/docs/:path*`,
+            },
+          ]
+        : [],
+      afterFiles: remoteApiUrl
+        ? [
+            {
+              source: "/v1/:path*",
+              destination: `${remoteApiUrl}/v1/:path*`,
+            },
+            {
+              source: "/api/:path*",
+              destination: `${remoteApiUrl}/api/:path*`,
+            },
+            {
+              source: "/ws",
+              destination: `${remoteApiUrl}/ws`,
+            },
+            {
+              source: "/health",
+              destination: `${remoteApiUrl}/health`,
+            },
+            {
+              source: "/auth/:path*",
+              destination: `${remoteApiUrl}/auth/:path*`,
+            },
+            {
+              source: "/uploads/:path*",
+              destination: `${remoteApiUrl}/uploads/:path*`,
+            },
+          ]
+        : [],
       fallback: [],
     };
   },
 };
 
-export default nextConfig;
+// fumadocs-mdx@12 is incompatible with Next 16's Turbopack: its loader fails to
+// dynamic-import `.source/source.config.mjs` under the Turbopack Node evaluator
+// (see fumadocs#2658). `dev`/`build` scripts pass `--webpack` to opt out.
+// Drop the flag once fumadocs-mdx ships a Turbopack-compatible loader.
+const withMDX = createMDX() as (config: NextConfig) => NextConfig;
+
+export default withMDX(nextConfig);

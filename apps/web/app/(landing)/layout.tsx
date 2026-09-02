@@ -1,19 +1,17 @@
-import { cookies, headers } from "next/headers";
-import { Instrument_Serif, Noto_Serif_SC } from "next/font/google";
-import { LOCALE_COOKIE } from "@multica/core/i18n";
+import { Instrument_Serif } from "next/font/google";
 import { LocaleProvider } from "@/features/landing/i18n";
-import type { Locale } from "@/features/landing/i18n";
+import { getRequestLocale } from "@/lib/request-locale";
 
+// Instrument Serif is the landing display face and is Latin-only. The full
+// `--font-serif` stack (Instrument Serif + the per-locale CJK serif tail) is
+// composed in static CSS in app/custom.css, not here — same reasoning as
+// `--font-sans` in app/globals.css: the CJK tail must be overridable per
+// `<html lang>`, and a hashed next/font family can only be referenced from CSS
+// through its variable.
 const instrumentSerif = Instrument_Serif({
   subsets: ["latin"],
   weight: "400",
-  variable: "--font-serif",
-});
-
-const notoSerifSC = Noto_Serif_SC({
-  subsets: ["latin"],
-  weight: "400",
-  variable: "--font-serif-zh",
+  variable: "--font-instrument-serif",
 });
 
 const jsonLd = {
@@ -41,26 +39,12 @@ const jsonLd = {
   ],
 };
 
-async function getInitialLocale(): Promise<Locale> {
-  // 1. User's explicit preference (cookie set when they switch language)
-  const cookieStore = await cookies();
-  const stored = cookieStore.get(LOCALE_COOKIE)?.value;
-  if (stored === "en" || stored === "zh") return stored;
-
-  // 2. Detect from Accept-Language header
-  const headersList = await headers();
-  const acceptLang = headersList.get("accept-language") ?? "";
-  if (acceptLang.includes("zh")) return "zh";
-
-  return "en";
-}
-
 export default async function LandingLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const initialLocale = await getInitialLocale();
+  const initialLocale = await getRequestLocale();
 
   return (
     <>
@@ -68,7 +52,7 @@ export default async function LandingLayout({
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
-      <div className={`${instrumentSerif.variable} ${notoSerifSC.variable} landing-light h-full overflow-x-hidden overflow-y-auto bg-white`}>
+      <div className={`${instrumentSerif.variable} landing-light h-full overflow-x-hidden overflow-y-auto bg-white`}>
         <LocaleProvider initialLocale={initialLocale}>{children}</LocaleProvider>
       </div>
     </>

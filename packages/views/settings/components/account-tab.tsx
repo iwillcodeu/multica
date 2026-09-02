@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Camera, Eye, EyeOff, Loader2, Save } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@multica/ui/components/ui/input";
-import { Label } from "@multica/ui/components/ui/label";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { Button } from "@multica/ui/components/ui/button";
-import { Card, CardContent } from "@multica/ui/components/ui/card";
 import {
   InputGroup,
   InputGroupAddon,
@@ -14,10 +13,32 @@ import {
 } from "@multica/ui/components/ui/input-group";
 import { toast } from "sonner";
 import { useAuthStore } from "@multica/core/auth";
-import { validateDisplayNameInput } from "@multica/core/display-name";
 import { api } from "@multica/core/api";
-import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { AvatarUploadControl } from "../../common/avatar-upload-control";
 import { useT } from "../../i18n";
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSaveState,
+  SettingsSection,
+  SettingsTab,
+} from "./settings-layout";
+import { useAutoSave } from "./use-auto-save";
+
+// Mirror server/internal/handler/auth.go:MaxProfileDescriptionLen. Counted in
+// JS String.length (UTF-16 code units) here while the server counts runes,
+// so a profile full of supplementary-plane emoji will trip the client cap
+// before the server's — which is the safer direction of drift.
+const MAX_PROFILE_DESCRIPTION_LEN = 2000;
+
+interface ProfileDraft {
+  name: string;
+  profileDescription: string;
+}
+
+function profilesEqual(left: ProfileDraft, right: ProfileDraft) {
+  return left.name === right.name && left.profileDescription === right.profileDescription;
+}
 
 export function AccountTab() {
   const { t } = useT("settings");
@@ -25,59 +46,63 @@ export function AccountTab() {
   const setUser = useAuthStore((s) => s.setUser);
 
   const [profileName, setProfileName] = useState(user?.name ?? "");
-  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileDescription, setProfileDescription] = useState(
+    user?.profile_description ?? "",
+  );
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [currentPasswordVisible, setCurrentPasswordVisible] = useState(false);
   const [newPasswordVisible, setNewPasswordVisible] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
-  const { upload, uploading } = useFileUpload(api);
-  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setProfileName(user?.name ?? "");
-  }, [user]);
+    setProfileDescription(user?.profile_description ?? "");
+    // Preserve in-progress edits when an avatar upload or auto-save replaces
+    // the current user object in the auth store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keyed on user identity
+  }, [user?.id]);
 
-  const initials = (user?.name ?? "")
-    .split(" ")
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
 
-  const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // Reset input so the same file can be re-selected
-    e.target.value = "";
-    try {
-      const result = await upload(file);
-      if (!result) return;
-      const updated = await api.updateMe({ avatar_url: result.link });
+  const draft = useMemo(
+    () => ({ name: profileName, profileDescription }),
+    [profileDescription, profileName],
+  );
+  const savedDraft = useMemo(
+    () => ({
+      name: user?.name ?? "",
+      profileDescription: user?.profile_description ?? "",
+    }),
+    [user?.name, user?.profile_description],
+  );
+  const saveProfile = useCallback(
+    async (next: ProfileDraft) => {
+      const updated = await api.updateMe({
+        name: next.name,
+        profile_description: next.profileDescription,
+      });
       setUser(updated);
-      toast.success(t(($) => $.account.toast_avatar_updated));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : t(($) => $.account.toast_avatar_failed));
-    }
-  };
-
-  const handleProfileSave = async () => {
-    const nameErr = validateDisplayNameInput(profileName);
-    if (nameErr) {
-      toast.error(nameErr);
-      return;
-    }
-    setProfileSaving(true);
-    try {
-      const updated = await api.updateMe({ name: profileName.trim() });
-      setUser(updated);
-      toast.success(t(($) => $.account.toast_profile_updated));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : t(($) => $.account.toast_profile_failed));
-    } finally {
-      setProfileSaving(false);
-    }
-  };
+    },
+    [setUser],
+  );
+  const autoSave = useAutoSave({
+    value: draft,
+    savedValue: savedDraft,
+    onSave: saveProfile,
+    onSuccess: () =>
+      toast.success(t(($) => $.account.toast_profile_updated), {
+        id: "settings-auto-save",
+      }),
+    onError: (error) =>
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t(($) => $.account.toast_profile_failed),
+      ),
+    enabled: !!user && !!profileName.trim() && !descriptionTooLong,
+    isEqual: profilesEqual,
+  });
 
   const handlePasswordSave = async () => {
     const np = newPassword.trim();
@@ -105,125 +130,125 @@ export function AccountTab() {
   };
 
   return (
-    <div className="space-y-8">
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">{t(($) => $.account.section_profile)}</h2>
-
-        <Card>
-          <CardContent className="space-y-4">
-            {/* Avatar upload */}
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                className="group relative h-16 w-16 shrink-0 rounded-full bg-muted overflow-hidden focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading}
-              >
-                {user?.avatar_url ? (
-                  <img
-                    src={user.avatar_url}
-                    alt={user.name}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <span className="flex h-full w-full items-center justify-center text-lg font-semibold text-muted-foreground">
-                    {initials}
-                  </span>
-                )}
-                <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-                  {uploading ? (
-                    <Loader2 className="h-5 w-5 animate-spin text-white" />
-                  ) : (
-                    <Camera className="h-5 w-5 text-white" />
-                  )}
-                </div>
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleAvatarUpload}
-              />
-              <div className="text-xs text-muted-foreground">
-                {t(($) => $.account.click_avatar_hint)}
-              </div>
-            </div>
-
-            <div>
-              <Label className="text-xs text-muted-foreground">{t(($) => $.account.name_label)}</Label>
-              <Input
-                type="search"
-                value={profileName}
-                onChange={(e) => setProfileName(e.target.value)}
-                className="mt-1"
+    <SettingsTab title={t(($) => $.page.tabs.profile)}>
+      <SettingsSection
+        title={t(($) => $.account.section_profile)}
+        action={
+          <SettingsSaveState
+            status={autoSave.status}
+            savingLabel={t(($) => $.auto_save.saving)}
+            savedLabel={t(($) => $.auto_save.saved)}
+            errorLabel={t(($) => $.auto_save.failed)}
+          />
+        }
+      >
+        <SettingsCard>
+          <SettingsRow
+            label={t(($) => $.account.avatar_label)}
+            description={t(($) => $.account.click_avatar_hint)}
+            size="none"
+          >
+            <div className="flex justify-start sm:justify-end">
+              <AvatarUploadControl
+                variant="user"
+                value={user?.avatar_url ?? null}
+                name={user?.name ?? ""}
+                size={64}
+                onUploaded={async (url) => {
+                  try {
+                    const updated = await api.updateMe({ avatar_url: url });
+                    setUser(updated);
+                    toast.success(t(($) => $.account.toast_avatar_updated), {
+                      id: "settings-auto-save",
+                    });
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : t(($) => $.account.toast_avatar_failed),
+                    );
+                  }
+                }}
               />
             </div>
-            <div className="flex items-center justify-end gap-2 pt-1">
-              <Button
-                size="sm"
-                onClick={handleProfileSave}
-                disabled={profileSaving || !profileName.trim()}
-              >
-                <Save className="h-3 w-3" />
-                {profileSaving ? t(($) => $.account.saving) : t(($) => $.account.save)}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </section>
+          </SettingsRow>
 
-      <section className="space-y-4">
-        <h2 className="text-sm font-semibold">Password</h2>
-        <Card>
-          <CardContent className="space-y-4">
-            {user?.has_password && (
-              <div>
-                <Label className="text-xs text-muted-foreground">Current password</Label>
-                <InputGroup className="mt-1 max-w-md">
-                  <InputGroupInput
-                    type={currentPasswordVisible ? "text" : "password"}
-                    autoComplete="current-password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                  />
-                  <InputGroupAddon align="inline-end">
-                    <InputGroupButton
-                      type="button"
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={currentPasswordVisible ? "Hide password" : "Show password"}
-                      onClick={() => setCurrentPasswordVisible((v) => !v)}
-                    >
-                      {currentPasswordVisible ? (
-                        <EyeOff className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </InputGroupButton>
-                  </InputGroupAddon>
-                </InputGroup>
-              </div>
-            )}
+          <SettingsRow
+            label={t(($) => $.account.name_label)}
+            size="text"
+          >
+            <Input
+              type="text"
+              name="profile-name"
+              autoComplete="name"
+              aria-label={t(($) => $.account.name_label)}
+              value={profileName}
+              onChange={(event) => setProfileName(event.target.value)}
+              onBlur={autoSave.flush}
+            />
+          </SettingsRow>
+
+          <SettingsRow
+            label={t(($) => $.account.profile_description_label)}
+            description={t(($) => $.account.profile_description_hint)}
+            size="text"
+            align="start"
+          >
             <div>
-              <Label className="text-xs text-muted-foreground">New password</Label>
-              <InputGroup className="mt-1 max-w-md">
+              <Textarea
+                name="profile-description"
+                autoComplete="off"
+                aria-label={t(($) => $.account.profile_description_label)}
+                value={profileDescription}
+                onChange={(event) => setProfileDescription(event.target.value)}
+                onBlur={autoSave.flush}
+                placeholder={t(($) => $.account.profile_description_placeholder)}
+                rows={5}
+                maxLength={MAX_PROFILE_DESCRIPTION_LEN}
+                aria-invalid={descriptionTooLong}
+                className="resize-y"
+              />
+              <div className="mt-1 flex justify-end text-caption text-muted-foreground">
+                <span
+                  className={descriptionTooLong ? "text-destructive shrink-0" : "shrink-0"}
+                  aria-live="polite"
+                >
+                  {profileDescription.length}/{MAX_PROFILE_DESCRIPTION_LEN}
+                </span>
+              </div>
+              {descriptionTooLong ? (
+                <p className="mt-1 text-caption text-destructive">
+                  {t(($) => $.account.profile_description_too_long, {
+                    max: MAX_PROFILE_DESCRIPTION_LEN,
+                    count: profileDescription.length,
+                  })}
+                </p>
+              ) : null}
+            </div>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+
+      <SettingsSection title="Password">
+        <SettingsCard>
+          {user?.has_password && (
+            <SettingsRow label="Current password" size="text">
+              <InputGroup>
                 <InputGroupInput
-                  type={newPasswordVisible ? "text" : "password"}
-                  autoComplete="new-password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="At least 8 characters"
+                  type={currentPasswordVisible ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
                 />
                 <InputGroupAddon align="inline-end">
                   <InputGroupButton
                     type="button"
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={newPasswordVisible ? "Hide password" : "Show password"}
-                    onClick={() => setNewPasswordVisible((v) => !v)}
+                    aria-label={currentPasswordVisible ? "Hide password" : "Show password"}
+                    onClick={() => setCurrentPasswordVisible((v) => !v)}
                   >
-                    {newPasswordVisible ? (
+                    {currentPasswordVisible ? (
                       <EyeOff className="h-4 w-4 text-muted-foreground" />
                     ) : (
                       <Eye className="h-4 w-4 text-muted-foreground" />
@@ -231,7 +256,35 @@ export function AccountTab() {
                   </InputGroupButton>
                 </InputGroupAddon>
               </InputGroup>
-            </div>
+            </SettingsRow>
+          )}
+          <SettingsRow label="New password" size="text">
+            <InputGroup>
+              <InputGroupInput
+                type={newPasswordVisible ? "text" : "password"}
+                autoComplete="new-password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="At least 8 characters"
+              />
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={newPasswordVisible ? "Hide password" : "Show password"}
+                  onClick={() => setNewPasswordVisible((v) => !v)}
+                >
+                  {newPasswordVisible ? (
+                    <EyeOff className="h-4 w-4 text-muted-foreground" />
+                  ) : (
+                    <Eye className="h-4 w-4 text-muted-foreground" />
+                  )}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+          </SettingsRow>
+          <SettingsRow label="" size="none">
             <div className="flex justify-end">
               <Button
                 type="button"
@@ -246,9 +299,9 @@ export function AccountTab() {
                 {passwordSaving ? "Updating…" : user?.has_password ? "Change password" : "Set password"}
               </Button>
             </div>
-          </CardContent>
-        </Card>
-      </section>
-    </div>
+          </SettingsRow>
+        </SettingsCard>
+      </SettingsSection>
+    </SettingsTab>
   );
 }

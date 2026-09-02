@@ -9,11 +9,8 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-const useWebpack = process.env.STANDALONE === "true";
-const pnpmArgs = ["exec", "next", "build"];
-if (useWebpack) {
-  pnpmArgs.push("--webpack");
-}
+// fumadocs-mdx@12 is incompatible with Next 16 Turbopack; always use webpack.
+const pnpmArgs = ["exec", "next", "build", "--webpack"];
 
 const result = spawnSync("pnpm", pnpmArgs, {
   stdio: "inherit",

@@ -1,9 +1,10 @@
 package agent
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,12 @@ import (
 	"strings"
 	"time"
 )
+
+// openclawNoParseableOutput is the canonical error string surfaced when the
+// adapter cannot extract any usable JSON from a run's stdout. The exact
+// phrase is depended on by external log-grep / dashboard alerts; do not
+// change it without also updating those consumers.
+const openclawNoParseableOutput = "openclaw returned no parseable output"
 
 // minOpenclawVersion is the lowest openclaw version that emits its
 // --json result on stdout. PR #2101 swapped the adapter from reading
@@ -54,15 +61,12 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		return nil, fmt.Errorf("openclaw executable not found at %q: %w", execPath, err)
 	}
 
-	if err := checkOpenclawVersion(ctx, execPath); err != nil {
+	if err := checkOpenclawVersion(ctx, b.cfg.commandAt(execPath)); err != nil {
 		return nil, err
 	}
 
 	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = 20 * time.Minute
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := runContext(ctx, timeout)
 
 	sessionID := opts.ResumeSessionID
 	if sessionID == "" {
@@ -70,10 +74,26 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	}
 	args := buildOpenclawArgs(prompt, sessionID, opts, b.cfg.Logger)
 
-	cmd := exec.CommandContext(runCtx, execPath, args...)
+	cmd := b.cfg.commandAt(execPath).exec(runCtx, args...)
 	hideAgentWindow(cmd)
-	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
-	cmd.WaitDelay = 10 * time.Second
+	b.cfg.logAgentCommand(cmd, newAgentCommandLogArgs(args, trustAgentCommandPositional(0, "agent")))
+	// 500ms, matching cursor-agent — the other backend whose CLI can deliver a
+	// terminal result while keeping a process alive.
+	//
+	// Note what WaitDelay actually bounds, because it is easy to get wrong: the
+	// timer starts when the context is done OR when Wait observes the child has
+	// exited, whichever comes first. So a *clean* exit reaches it too, whenever
+	// any descendant still holds one of the pipes os/exec manages — and this
+	// backend has such a pipe, since cmd.Stderr below is a plain io.Writer. In
+	// that case Wait returns exec.ErrWaitDelay even though the process exited 0,
+	// which is why the status switch has to special-case it: the result is
+	// already parsed and in hand, and only a tail of stderr logs is lost.
+	//
+	// Lowering the bound is still right. The delay is only reached when someone
+	// is holding a pipe open, and on the cut-short path we deliberately kill a
+	// process that is doing exactly that — a long delay there would add its full
+	// length to every reply.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
@@ -90,7 +110,7 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 	}
 	cmd.Stderr = newLogWriter(b.cfg.Logger, "[openclaw:stderr] ")
 
-	if err := cmd.Start(); err != nil {
+	if err := startOwnedProcessTree(cmd, b.cfg.Logger); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start openclaw: %w", err)
 	}
@@ -114,17 +134,57 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 		startTime := time.Now()
 		scanResult := b.processOutput(stdout, msgCh)
 
+		// openclaw delivered a complete result but would not exit. Cancel the
+		// run context so CommandContext kills it and cmd.Wait can return —
+		// otherwise this goroutine parks forever on an agent that has already
+		// finished, and the reply never reaches the user. Same protocol-boundary
+		// treatment cursor-agent gets on its terminal `result` event.
+		if scanResult.cutShort {
+			b.cfg.Logger.Warn("openclaw delivered its result but did not exit; "+
+				"treating the complete result as the protocol boundary",
+				"pid", cmd.Process.Pid)
+			cancel()
+		}
+
 		// Wait for process exit.
 		exitErr := cmd.Wait()
+		releaseProcessGroup(cmd)
 		duration := time.Since(startTime)
 
-		if runCtx.Err() == context.DeadlineExceeded {
+		switch {
+		case scanResult.cutShort:
+			// A complete result is the protocol boundary. Ignore the
+			// cancellation and exit error caused by stopping an openclaw that
+			// lingers afterward — the run succeeded, and reporting it as
+			// "aborted" would throw away a reply we already hold.
+		case runCtx.Err() == context.DeadlineExceeded:
 			scanResult.status = "timeout"
 			scanResult.errMsg = fmt.Sprintf("openclaw timed out after %s", timeout)
-		} else if runCtx.Err() == context.Canceled {
+		case runCtx.Err() == context.Canceled:
 			scanResult.status = "aborted"
 			scanResult.errMsg = "execution cancelled"
-		} else if exitErr != nil && scanResult.status == "completed" {
+		case errors.Is(exitErr, exec.ErrWaitDelay) && scanResult.status == "completed":
+			// The process itself exited successfully — that is what
+			// ErrWaitDelay means by definition — and only a lingering
+			// descendant kept one of os/exec's pipes open past WaitDelay.
+			// stdout has already been read to EOF and the result parsed, so the
+			// only thing lost is a tail of stderr log lines. Reporting this as
+			// a failure would discard a deliverable reply, which is a worse
+			// outcome than the hang this whole change fixes.
+			//
+			// Not folded into the cutShort case above: that path cancels on
+			// purpose, and a Cancel call makes Wait report the kill instead of
+			// ErrWaitDelay. This case is specifically the clean-exit one.
+			//
+			// Reword with care: this warning is the only observable proof that
+			// this branch ran, so TestOpenclawExecuteToleratesLingeringStderrHolder
+			// asserts on the "held a pipe past WaitDelay" fragment. That fragment
+			// straddles the concatenation below, so grepping the source for it
+			// finds nothing — hence this note.
+			b.cfg.Logger.Warn("openclaw exited cleanly but a descendant held a "+
+				"pipe past WaitDelay; delivering the parsed result and dropping "+
+				"the stderr tail", "pid", cmd.Process.Pid)
+		case exitErr != nil && scanResult.status == "completed":
 			scanResult.status = "failed"
 			scanResult.errMsg = fmt.Sprintf("openclaw exited with error: %v", exitErr)
 		}
@@ -171,17 +231,32 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 // registration time via `openclaw agents add/update --model`, and instructions
 // must be injected inline into --message because openclaw loads AGENTS.md from
 // its own workspace directory, not from cwd.
+//
+// Routing (issue #3260): `openclaw agent` defaults to Gateway routing; --local
+// is the embedded-mode opt-in. The daemon historically forced --local so every
+// run executed in-process on the daemon host. When opts.OpenclawMode ==
+// "gateway" the daemon drops --local so openclaw dials its configured Gateway
+// instead — useful when the daemon host is a lightweight coordinator and the
+// real agent work should land on a remote machine running the Gateway.
+// --local stays in openclawBlockedArgs so users cannot smuggle it back in via
+// custom_args under gateway mode (mode is the single source of truth).
 func buildOpenclawArgs(prompt, sessionID string, opts ExecOptions, logger *slog.Logger) []string {
-	args := []string{"agent", "--local", "--json", "--session-id", sessionID}
+	args := []string{"agent"}
+	if opts.OpenclawMode != "gateway" {
+		args = append(args, "--local")
+	}
+	args = append(args, "--json", "--session-id", sessionID)
 	if opts.Timeout > 0 {
 		args = append(args, "--timeout", fmt.Sprintf("%d", int(opts.Timeout.Seconds())))
 	}
 	// OpenClaw binds models to pre-registered agents at `openclaw agents
 	// add/update --model` time; the daemon selects one at runtime by
-	// passing --agent <name>. The model dropdown populates its list from
-	// `openclaw agents list`, so opts.Model here is an agent name. Only
-	// inject when the user hasn't already set --agent via custom_args —
-	// custom_args wins for backward compatibility with existing configs.
+	// passing --agent <id>. The model dropdown populates its list from
+	// `openclaw agents list`, so opts.Model here is an agent id (see
+	// openclawEntriesToModels — the agent's display name lives in the
+	// dropdown label, not in opts.Model). Only inject when the user
+	// hasn't already set --agent via custom_args — custom_args wins for
+	// backward compatibility with existing configs.
 	customArgs := filterCustomArgs(opts.CustomArgs, openclawBlockedArgs, logger)
 	if opts.Model != "" && !customArgsContains(customArgs, "--agent") {
 		args = append(args, "--agent", opts.Model)
@@ -212,16 +287,47 @@ func customArgsContains(args []string, flag string) bool {
 // minOpenclawVersion. The returned error becomes the task's failure
 // comment, so the message intentionally names the detected version
 // and the upgrade command.
-func checkOpenclawVersion(ctx context.Context, execPath string) error {
-	cmd := exec.CommandContext(ctx, execPath, "--version")
+func checkOpenclawVersion(ctx context.Context, runtimeCmd Command) error {
+	// This runs synchronously before Execute creates the provider session, so a
+	// pipe-holding descendant here would otherwise leave a task marked running
+	// with no backend and no inactivity watchdog to stop it. ctx is the task's
+	// and can be hours long, so the probe carries the same bound every other
+	// provider's version probe gets.
+	ctx, cancel := context.WithTimeout(ctx, detectVersionTimeout)
+	defer cancel()
+
+	// combinedOutputOwned, for the reason recorded on detectCLIVersion: pipe EOF
+	// is the signal that no more output is coming, and the direct child's exit is
+	// not. openclaw is npm-installed, so on Windows the direct child is a shim and
+	// the real CLI is already a descendant.
+	//
+	// Both streams are parsed, and extractVersionLine is deliberately bypassed.
+	// CombinedOutput rather than separate buffers because a build that prints its
+	// banner on stderr must still pass the gate, and one shared writer is what
+	// makes os/exec give the two streams a single pipe and therefore one
+	// interleaving. parseOpenclawVersion already scans the whole text with
+	// openclaw's own version pattern, whereas picking "the first line containing a
+	// semver" first would let unrelated stderr noise answer for it — a node
+	// deprecation warning carries one.
+	cmd := runtimeCmd.exec(ctx, "--version")
 	hideAgentWindow(cmd)
-	out, err := cmd.CombinedOutput()
+	raw, err := combinedOutputOwned(cmd, runtimeCmd.logger)
+	out := string(raw)
+	detected, parsed := parseOpenclawVersion(out)
 	if err != nil {
-		return fmt.Errorf("openclaw --version failed: %w", err)
+		// The gate may proceed on a version that arrived before a lingering
+		// `openclaw-config` helper held the pipes past WaitDelay — failing here
+		// would fail the task over an answer we have. Anything else (non-zero
+		// exit, deadline) still fails; see salvageProbeAnswer.
+		if !salvageProbeAnswer(runtimeCmd, "--version", parsed, err) {
+			// ExplainExecError by hand: detectCLIVersion applies it on the daemon's
+			// probe path, and this is the other gate that has to name an ENOEXEC
+			// shim rather than report an opaque exec failure (MUL-6164).
+			return fmt.Errorf("openclaw --version failed: %w", ExplainExecError(err))
+		}
 	}
-	detected, ok := parseOpenclawVersion(string(out))
-	if !ok {
-		return fmt.Errorf("could not parse openclaw version from output: %q", strings.TrimSpace(string(out)))
+	if !parsed {
+		return fmt.Errorf("could not parse openclaw version from output: %q", strings.TrimSpace(out))
 	}
 	if compareOpenclawVersion(detected, minOpenclawVersion) < 0 {
 		return fmt.Errorf("openclaw %s is below the minimum supported version %s. Run `openclaw update` to upgrade and try again.", detected, minOpenclawVersion)
@@ -275,6 +381,13 @@ type openclawEventResult struct {
 	// which for the openclaw backend is the openclaw *agent* name passed
 	// via `--agent`, not the underlying model.
 	model string
+	// cutShort is true when the run ended because openclaw had delivered a
+	// complete result but would not exit, rather than because stdout reached
+	// EOF. The caller must cancel the run context before cmd.Wait() in that
+	// case — otherwise it waits on a process that never leaves — and must not
+	// report the resulting cancellation as an abort. Same treatment
+	// cursor-agent's `resultSeen` gets.
+	cutShort bool
 }
 
 // processOutput reads the JSON output from openclaw --json stdout and returns
@@ -282,15 +395,48 @@ type openclawEventResult struct {
 // log overflow and is captured separately by the caller. The stream may
 // contain:
 //
+//   - A final result JSON (with payloads + meta) — the format openclaw 2026.5.x
+//     emits today, typically pretty-printed across many lines
 //   - NDJSON streaming events (type: "text", "tool_use", "tool_result", "error",
-//     "step_start", "step_finish") — emitted in real time as the agent works
-//   - A final result JSON (with payloads + meta) — the legacy single-blob format
+//     "step_start", "step_finish") — supported for forward compatibility and
+//     other backends sharing this code path; openclaw does not emit these today
 //
-// We scan line-by-line, emitting messages as events arrive so streaming
-// consumers get real-time feedback instead of waiting for the final blob.
+// Implementation note (WOR-10 follow-up): we previously scanned line-by-line
+// only, then tried a whole-buffer parse in a fallback path. Under load
+// (daemon shutdown racing the scanner, partial chunked reads) the line
+// scanner could see truncated input that never reassembled, surfacing the
+// generic "openclaw returned no parseable output" error even though the
+// agent's work succeeded. We now read the full buffer first and try a
+// single whole-buffer parse against the final-result schema. Only if that
+// fails do we fall through to the line-by-line NDJSON scanner. This makes
+// the dominant happy path (one pretty-printed JSON blob) deterministic
+// while keeping NDJSON event support intact.
 func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclawEventResult {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	buf, cutShort, readErr := readOpenclawStdout(r, openclawResultIdleGrace)
+	if readErr != nil {
+		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", readErr)}
+	}
+
+	// Whole-buffer fast path: openclaw 2026.5.x emits a single pretty-printed
+	// JSON result blob. Try parsing the entire buffer (after trimming whitespace
+	// and any preceding non-JSON log lines) as the final-result schema. If it
+	// matches, we're done — no need to involve the line scanner at all.
+	if result, ok := parseWholeBufferOpenclawResult(buf); ok {
+		var output strings.Builder
+		res := b.buildOpenclawEventResult(result, ch, &output)
+		res.cutShort = cutShort
+		return res
+	}
+
+	// Fall-back path: NDJSON line scanner. Note that because we already
+	// drained the full buffer with io.ReadAll above, this path is no longer
+	// truly streaming — events accumulate until the subprocess closes
+	// stdout, then drain all at once. OpenClaw 2026.5.x does not emit
+	// streaming events, so this regression is invisible today; if a future
+	// backend on this code path emits real NDJSON streams and needs live
+	// progress updates, we'll need to split the fast path off a streaming
+	// reader instead of io.ReadAll.
+	scanner := newAgentStreamScanner(bytes.NewReader(buf))
 
 	var output strings.Builder
 	var sessionID string
@@ -393,30 +539,20 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 		return openclawEventResult{status: "failed", errMsg: fmt.Sprintf("read stdout: %v", err)}
 	}
 
-	// If we got no events at all, fall back to raw output.
+	// If we got no events at all, fall back to raw output. The whole-buffer
+	// fast path above already tried the structured-result parse — by the time
+	// we reach here the buffer truly is unstructured (just log lines, plain
+	// text, or empty). Surface the trimmed text as a completed run when we
+	// have any, otherwise the canonical no-parseable-output failure.
 	if !gotEvents {
-		// OpenClaw may output pretty-printed (multi-line) JSON. No single line
-		// would parse, so try parsing the accumulated output as a whole.
-		// Log lines may precede the JSON, so find the first '{' at line start.
 		trimmed := strings.TrimSpace(strings.Join(rawLines, "\n"))
 		if trimmed != "" {
-			if result, ok := tryParseOpenclawResult(trimmed); ok {
-				return b.buildOpenclawEventResult(result, ch, &output)
-			}
-			// Log lines may precede the JSON blob. Find the first line that
-			// starts with '{' and try parsing from there.
-			for i, line := range rawLines {
-				if len(line) > 0 && line[0] == '{' {
-					candidate := strings.TrimSpace(strings.Join(rawLines[i:], "\n"))
-					if result, ok := tryParseOpenclawResult(candidate); ok {
-						return b.buildOpenclawEventResult(result, ch, &output)
-					}
-					break
-				}
-			}
 			return openclawEventResult{status: "completed", output: trimmed}
 		}
-		return openclawEventResult{status: "failed", errMsg: "openclaw returned no parseable output"}
+		return openclawEventResult{
+			status: "failed",
+			errMsg: openclawNoParseableOutput,
+		}
 	}
 
 	return openclawEventResult{
@@ -427,6 +563,38 @@ func (b *openclawBackend) processOutput(r io.Reader, ch chan<- Message) openclaw
 		usage:     usage,
 		model:     model,
 	}
+}
+
+// parseWholeBufferOpenclawResult attempts to parse the entire stdout buffer
+// as a single openclaw final-result JSON blob (the format openclaw 2026.5.x
+// emits today, almost always pretty-printed across multiple lines).
+//
+// It first tries the buffer as-is, then strips any leading non-JSON log
+// lines (lines that don't start with '{' at column 0) so a daemon log
+// preamble doesn't defeat the parse. It does NOT scan into the middle of
+// log lines: only line starts that begin with '{' are considered candidate
+// JSON entry points, mirroring the conservative behaviour of
+// tryParseOpenclawResult.
+func parseWholeBufferOpenclawResult(buf []byte) (openclawResult, bool) {
+	trimmed := strings.TrimSpace(string(buf))
+	if trimmed == "" {
+		return openclawResult{}, false
+	}
+	if result, ok := tryParseOpenclawResult(trimmed); ok {
+		return result, true
+	}
+	// Strip any leading log lines that precede the JSON blob.
+	lines := strings.Split(trimmed, "\n")
+	for i, line := range lines {
+		if len(line) > 0 && line[0] == '{' {
+			candidate := strings.TrimSpace(strings.Join(lines[i:], "\n"))
+			if result, ok := tryParseOpenclawResult(candidate); ok {
+				return result, true
+			}
+			return openclawResult{}, false
+		}
+	}
+	return openclawResult{}, false
 }
 
 // tryParseOpenclawEvent attempts to parse a line as a streaming NDJSON event.

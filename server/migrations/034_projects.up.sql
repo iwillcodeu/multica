@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS project (
 
 CREATE INDEX IF NOT EXISTS idx_project_workspace ON project(workspace_id);
 
+-- Parseable for sqlc (it ignores the DO-block below). IF NOT EXISTS is a
+-- no-op on databases that already ran this migration's procedural upgrades.
+ALTER TABLE project ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE project ADD COLUMN IF NOT EXISTS icon TEXT;
+ALTER TABLE project ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'planned';
+ALTER TABLE project ADD COLUMN IF NOT EXISTS lead_type TEXT;
+ALTER TABLE project ADD COLUMN IF NOT EXISTS lead_id UUID;
+
 ALTER TABLE issue ADD COLUMN IF NOT EXISTS project_id UUID REFERENCES project(id) ON DELETE SET NULL;
 CREATE INDEX IF NOT EXISTS idx_issue_project ON issue(project_id);
 

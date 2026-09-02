@@ -3,8 +3,12 @@ package realtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -39,9 +43,11 @@ type ScopeAuthorizer interface {
 }
 
 var allowedWSOrigins atomic.Value // holds []string
+var trustedProxies atomic.Value   // holds []netip.Prefix
 
 func init() {
 	allowedWSOrigins.Store(loadAllowedOrigins())
+	trustedProxies.Store(loadTrustedProxies())
 }
 
 func loadAllowedOrigins() []string {
@@ -71,9 +77,83 @@ func loadAllowedOrigins() []string {
 	return origins
 }
 
+// loadTrustedProxies reads the same MULTICA_TRUSTED_PROXIES env var the rest of
+// the server uses (see cmd/server/router.go and handler.Config.TrustedProxies),
+// parsing it as a comma-separated list of CIDR prefixes. Invalid entries are
+// dropped with a warn-line rather than crashing. Empty input returns nil, which
+// means "trust no proxy" — X-Forwarded-Host is then never honored. The router
+// overrides this at startup via SetTrustedProxies so both share one config.
+func loadTrustedProxies() []netip.Prefix {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_TRUSTED_PROXIES"))
+	if raw == "" {
+		return nil
+	}
+	var prefixes []netip.Prefix
+	for _, part := range strings.Split(raw, ",") {
+		s := strings.TrimSpace(part)
+		if s == "" {
+			continue
+		}
+		p, err := netip.ParsePrefix(s)
+		if err != nil {
+			slog.Warn("ws: ignoring invalid trusted proxy CIDR", "value", s, "error", err)
+			continue
+		}
+		prefixes = append(prefixes, p)
+	}
+	return prefixes
+}
+
 // SetAllowedOrigins overrides the WebSocket origin whitelist.
 func SetAllowedOrigins(origins []string) {
 	allowedWSOrigins.Store(origins)
+}
+
+// SetTrustedProxies overrides the trusted proxy CIDR list. The server wires the
+// shared MULTICA_TRUSTED_PROXIES value in here at startup.
+func SetTrustedProxies(proxies []netip.Prefix) {
+	trustedProxies.Store(proxies)
+}
+
+// isTrustedProxy reports whether the request's remote address falls within one
+// of the configured trusted proxy CIDRs.
+func isTrustedProxy(remoteAddr string) bool {
+	proxies := trustedProxies.Load().([]netip.Prefix)
+	if len(proxies) == 0 {
+		return false
+	}
+	addr, err := netip.ParseAddr(remoteHost(remoteAddr))
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, p := range proxies {
+		if p.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// remoteHost extracts the host/IP from an http.Request.RemoteAddr, which is
+// normally "host:port". It handles bracketed IPv6 ("[::1]:443") via
+// net.SplitHostPort and falls back to the raw value (sans brackets) when no
+// port is present.
+func remoteHost(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return strings.Trim(remoteAddr, "[]")
+}
+
+// firstForwardedHost returns the first host from a (possibly comma-separated)
+// X-Forwarded-Host header. Proxy chains append values left-to-right, so the
+// first entry is the original client-facing host we compare against Origin.
+func firstForwardedHost(h string) string {
+	if i := strings.IndexByte(h, ','); i >= 0 {
+		h = h[:i]
+	}
+	return strings.TrimSpace(h)
 }
 
 func checkOrigin(r *http.Request) bool {
@@ -81,11 +161,23 @@ func checkOrigin(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	// Native mobile clients authenticate with an explicit first-frame token.
-	// Origin is a browser CSRF control, so only skip it for mobile requests
-	// that are not carrying the browser session cookie.
-	if r.URL.Query().Get("client_platform") == "mobile" {
-		if _, err := r.Cookie(auth.AuthCookieName); err == http.ErrNoCookie {
+	// Same-origin: native clients (mobile, CLI) have no real page host, so
+	// their WebSocket library fills Origin with the connection target —
+	// which equals the server's own Host. They authenticate via bearer
+	// token, not auto-attached cookies, so CSRF (the attack the explicit
+	// allowlist below defends against) does not apply. This matches the
+	// gorilla/websocket default CheckOrigin behavior; the allowlist exists
+	// in addition to support cross-origin browser clients (web/desktop).
+	if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	// Reverse-proxy support: when sitting behind a proxy the Host header
+	// contains the internal address. X-Forwarded-Host carries the original
+	// public host seen by the client, so we treat a matching origin as
+	// same-origin in that case too. SECURITY: Only trust X-Forwarded-Host
+	// if the request comes from a trusted proxy to prevent header spoofing.
+	if fwdHost := firstForwardedHost(r.Header.Get("X-Forwarded-Host")); fwdHost != "" && isTrustedProxy(r.RemoteAddr) {
+		if u, err := url.Parse(origin); err == nil && strings.EqualFold(u.Host, fwdHost) {
 			return true
 		}
 	}
@@ -95,7 +187,7 @@ func checkOrigin(r *http.Request) bool {
 			return true
 		}
 	}
-	slog.Warn("ws: rejected origin", "origin", origin)
+	slog.Warn("ws: rejected origin", "origin", origin, "remote_addr", r.RemoteAddr)
 	return false
 }
 
@@ -103,6 +195,15 @@ const (
 	writeWait  = 10 * time.Second
 	pongWait   = 60 * time.Second
 	pingPeriod = (pongWait * 9) / 10
+
+	// inboundReadLimit caps a single inbound message. Every frame a client
+	// legitimately sends is tiny — the largest is the token auth frame, well
+	// under 1 KiB — but gorilla buffers a whole message in memory before
+	// handing it over, and a fragmented message keeps the read deadline alive
+	// through interleaved pongs. Without a limit one connection can therefore
+	// grow that buffer without bound and OOM the process. Matches the daemon
+	// hub limit so both WebSocket surfaces answer this question the same way.
+	inboundReadLimit = 64 * 1024
 )
 
 var upgrader = websocket.Upgrader{
@@ -584,6 +685,9 @@ func authenticateToken(tokenStr string, pr PATResolver, ctx context.Context) (st
 		if !ok {
 			return "", `{"error":"invalid token"}`
 		}
+		if auth.IsTemporarilyDisabledUserID(uid) {
+			return "", `{"error":"account disabled"}`
+		}
 		return uid, ""
 	}
 
@@ -606,17 +710,33 @@ func authenticateToken(tokenStr string, pr PATResolver, ctx context.Context) (st
 	if !ok || strings.TrimSpace(uid) == "" {
 		return "", `{"error":"invalid claims"}`
 	}
+	email, _ := claims["email"].(string)
+	if auth.IsTemporarilyDisabledUser(uid, email) {
+		return "", `{"error":"account disabled"}`
+	}
 	return uid, ""
 }
 
 // firstMessageAuth reads the first WebSocket message expecting an auth payload.
-func firstMessageAuth(conn *websocket.Conn) (string, string) {
+// A non-empty errMsg is for the caller to write back before closing the
+// connection. closed=true means the connection is already torn down and the
+// caller must return without writing anything further.
+func firstMessageAuth(conn *websocket.Conn) (token, errMsg string, closed bool) {
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	defer conn.SetReadDeadline(time.Time{})
 
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
-		return "", `{"error":"auth timeout or read error"}`
+		if errors.Is(err, websocket.ErrReadLimit) {
+			// gorilla has already replied CloseMessageTooBig (1009), so an
+			// auth_error frame here would be data sent after a close frame.
+			// Counted separately to keep the breach out of ordinary churn.
+			M.InboundTooLargeTotal.Add(1)
+			slog.Warn("ws: pre-auth frame exceeded read limit", "limit_bytes", inboundReadLimit)
+			conn.Close()
+			return "", "", true
+		}
+		return "", `{"error":"auth timeout or read error"}`, false
 	}
 
 	var msg struct {
@@ -626,10 +746,28 @@ func firstMessageAuth(conn *websocket.Conn) (string, string) {
 		} `json:"payload"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil || msg.Type != "auth" || msg.Payload.Token == "" {
-		return "", `{"error":"expected auth message as first frame"}`
+		return "", `{"error":"expected auth message as first frame"}`, false
 	}
 
-	return msg.Payload.Token, ""
+	return msg.Payload.Token, "", false
+}
+
+type wsMessageWriter interface {
+	WriteMessage(messageType int, data []byte) error
+}
+
+func writeWSAuthFrame(conn wsMessageWriter, payload []byte, frame string, attrs ...any) bool {
+	if err := conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		logAttrs := append([]any{"frame", frame, "error", err}, attrs...)
+		slog.Warn("ws: failed to send auth frame", logAttrs...)
+		return false
+	}
+	return true
+}
+
+func writeWSAuthErrorAndClose(conn *websocket.Conn, payload []byte, attrs ...any) {
+	writeWSAuthFrame(conn, payload, "auth_error", attrs...)
+	conn.Close()
 }
 
 // HandleWebSocket upgrades an HTTP connection to WebSocket with cookie or
@@ -655,7 +793,11 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 	if cookie, err := r.Cookie(auth.AuthCookieName); err == nil && cookie.Value != "" {
 		uid, errMsg := authenticateToken(cookie.Value, pr, r.Context())
 		if errMsg != "" {
-			http.Error(w, errMsg, http.StatusUnauthorized)
+			status := http.StatusUnauthorized
+			if errMsg == `{"error":"account disabled"}` {
+				status = http.StatusForbidden
+			}
+			http.Error(w, errMsg, status)
 			return
 		}
 		if !mc.IsMember(r.Context(), uid, workspaceID) {
@@ -671,27 +813,46 @@ func HandleWebSocket(hub *Hub, mc MembershipChecker, pr PATResolver, resolveSlug
 		return
 	}
 
+	// Bound inbound messages here rather than in readPump: the token auth
+	// path below reads its first frame before the caller is authenticated, so
+	// a limit installed any later leaves that read unbounded.
+	conn.SetReadLimit(inboundReadLimit)
+
 	if userID == "" {
-		tokenStr, errMsg := firstMessageAuth(conn)
+		tokenStr, errMsg, closed := firstMessageAuth(conn)
+		if closed {
+			return
+		}
 		if errMsg != "" {
-			conn.WriteMessage(websocket.TextMessage, []byte(errMsg))
-			conn.Close()
+			writeWSAuthErrorAndClose(conn, []byte(errMsg), "workspace_id", workspaceID)
 			return
 		}
 		uid, errMsg := authenticateToken(tokenStr, pr, r.Context())
 		if errMsg != "" {
-			conn.WriteMessage(websocket.TextMessage, []byte(errMsg))
-			conn.Close()
+			writeWSAuthErrorAndClose(conn, []byte(errMsg), "workspace_id", workspaceID)
 			return
 		}
 		if !mc.IsMember(r.Context(), uid, workspaceID) {
-			conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"not a member of this workspace"}`))
-			conn.Close()
+			writeWSAuthErrorAndClose(
+				conn,
+				[]byte(`{"error":"not a member of this workspace"}`),
+				"workspace_id", workspaceID,
+				"user_id", uid,
+			)
 			return
 		}
 		userID = uid
 
-		conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"auth_ack"}`))
+		if !writeWSAuthFrame(
+			conn,
+			[]byte(`{"type":"auth_ack"}`),
+			"auth_ack",
+			"workspace_id", workspaceID,
+			"user_id", userID,
+		) {
+			conn.Close()
+			return
+		}
 	}
 
 	// Capture client metadata from query params (browsers cannot set custom
@@ -749,7 +910,17 @@ func (c *Client) readPump() {
 	for {
 		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			switch {
+			case errors.Is(err, websocket.ErrReadLimit):
+				// Counted separately so an over-limit close stays visible
+				// instead of blending into ordinary connection churn.
+				M.InboundTooLargeTotal.Add(1)
+				slog.Warn("ws: inbound frame exceeded read limit",
+					"limit_bytes", inboundReadLimit,
+					"user_id", c.userID,
+					"workspace_id", c.workspaceID,
+				)
+			case websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure):
 				slog.Debug("websocket read error", "error", err, "user_id", c.userID, "workspace_id", c.workspaceID)
 			}
 			break

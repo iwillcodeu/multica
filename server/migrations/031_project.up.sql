@@ -23,3 +23,8 @@ WHERE p.workspace_id = i.workspace_id;
 ALTER TABLE issue ALTER COLUMN project_id SET NOT NULL;
 
 CREATE INDEX idx_issue_project ON issue(project_id);
+
+-- sqlc cannot parse the DO-block rename in 034_projects. This statement is the
+-- parseable form so generated queries see `title`. Environments that already
+-- applied this migration are unaffected (goose does not re-run it).
+ALTER TABLE project RENAME COLUMN name TO title;

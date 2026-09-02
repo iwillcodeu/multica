@@ -20,9 +20,9 @@ import type {
 } from "./types";
 
 // AgentAvailability mirrors RuntimeHealth's reachability buckets but folds
-// `about_to_gc` into `offline` — both mean "long unreachable" from the
-// user's standpoint; the GC-warning copy belongs to the runtime card, not
-// the agent dot.
+// `long_offline` into `offline` — both mean "unreachable" from the agent
+// availability standpoint; the duration detail belongs to the runtime card,
+// not the agent dot.
 export function deriveAgentAvailability(
   runtime: AgentRuntime | null,
   now: number,
@@ -31,7 +31,7 @@ export function deriveAgentAvailability(
   const health = deriveRuntimeHealth(runtime, now);
   if (health === "online") return "online";
   if (health === "recently_lost") return "unstable";
-  return "offline"; // offline | about_to_gc collapse here
+  return "offline"; // offline | long_offline collapse here
 }
 
 // Atomic workload derivation: pure 3-way classification of running/queued
@@ -62,7 +62,14 @@ export function deriveWorkloadDetail(tasks: readonly AgentTask[]): WorkloadDetai
   for (const t of tasks) {
     if (t.status === "running") {
       runningCount += 1;
-    } else if (t.status === "queued" || t.status === "dispatched") {
+    } else if (
+      t.status === "queued" ||
+      t.status === "dispatched" ||
+      // The daemon parked this task on a busy local_directory path. It's
+      // still on the agent's plate (counts toward "queued" presence), but
+      // it hasn't reached the run phase yet.
+      t.status === "waiting_local_directory"
+    ) {
       queuedCount += 1;
     }
     // Terminal statuses (completed / failed / cancelled) intentionally
@@ -87,6 +94,20 @@ interface DerivePresenceInput {
 }
 
 export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPresenceDetail {
+  // Archived wins over every runtime/task signal — a retired agent must
+  // never read as live anywhere. Short-circuit before deriving runtime
+  // health or workload so a leftover online runtime row or a stale snapshot
+  // task can't leak "Online" / "Working" into any consumer.
+  if (input.agent.archived_at) {
+    return {
+      availability: "archived",
+      workload: "idle",
+      runningCount: 0,
+      queuedCount: 0,
+      capacity: input.agent.max_concurrent_tasks,
+    };
+  }
+
   const availability = deriveAgentAvailability(input.runtime, input.now);
   const detail = deriveWorkloadDetail(input.tasks);
 

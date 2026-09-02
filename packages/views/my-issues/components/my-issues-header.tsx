@@ -1,412 +1,202 @@
 "use client";
 
-import { useMemo } from "react";
-import { useStore } from "zustand";
-import {
-  ArrowDown,
-  ArrowUp,
-  Check,
-  ChevronDown,
-  CircleDot,
-  Columns3,
-  Filter,
-  List,
-  SignalHigh,
-  SlidersHorizontal,
-  Tag,
-} from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   DropdownMenu,
-  DropdownMenuTrigger,
   DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuCheckboxItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import {
-  Popover,
-  PopoverTrigger,
-  PopoverContent,
-} from "@multica/ui/components/ui/popover";
-import { Switch } from "@multica/ui/components/ui/switch";
-import {
-  ALL_STATUSES,
-  CATEGORY_CONFIG,
-  ISSUE_CATEGORIES,
-  STATUS_CONFIG,
-  PRIORITY_ORDER,
-  PRIORITY_CONFIG,
-} from "@multica/core/issues/config";
-import { StatusIcon, PriorityIcon } from "../../issues/components";
-import { CategoryIcon } from "../../issues/components/category-icon";
-import {
-  SORT_OPTIONS,
-  CARD_PROPERTY_OPTIONS,
-} from "@multica/core/issues/stores/view-store";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
-import type { Issue } from "@multica/core/types";
-import { myIssuesViewStore, type MyIssuesScope } from "@multica/core/issues/stores/my-issues-view-store";
+import type {
+  Issue,
+  IssueTableFacetSpec,
+  IssueTableFacetsResponse,
+  WorkingAgentSummary,
+} from "@multica/core/types";
+import { type MyIssuesScope } from "@multica/core/issues/stores/my-issues-view-store";
+import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { useT } from "../../i18n";
+import { WorkspaceAgentWorkingChip } from "../../issues/components/workspace-agent-working-chip";
+import {
+  IssueDisplayControls,
+  ViewRefreshIndicator,
+} from "../../issues/components/issues-header";
+import { cn } from "@multica/ui/lib/utils";
+import { PAGE_GUTTER } from "../../layout/page-header";
+import { FilterChipsBar } from "../../issues/components/filter-chips-bar";
+import { toast } from "sonner";
+import { SaveViewDialog, type SaveViewScope } from "../../issues/components/save-view-dialog";
+import { useActiveIssueView } from "@multica/core/issue-views/use-active-view";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { baselineFromQuery } from "@multica/core/issue-views/baseline";
+import { ViewBar } from "../../issues/components/view-bar";
+import type { IssueView } from "@multica/core/api/schemas";
 
-// ---------------------------------------------------------------------------
-// HoverCheck
-// ---------------------------------------------------------------------------
+/** My Issues tab → saved-view scope_variant (API vocabulary). */
+const SAVE_VARIANT: Record<MyIssuesScope, Extract<SaveViewScope, { kind: "my" }>["variant"]> = {
+  all: "any",
+  assigned: "assigned",
+  created: "created",
+  agents: "involved",
+};
 
-const FILTER_ITEM_CLASS =
-  "group/fitem pr-1.5! [&>[data-slot=dropdown-menu-checkbox-item-indicator]]:hidden";
-
-function HoverCheck({ checked }: { checked: boolean }) {
-  return (
-    <div
-      className="border-input data-[selected=true]:border-primary data-[selected=true]:bg-primary data-[selected=true]:text-primary-foreground pointer-events-none size-4 shrink-0 rounded-[4px] border transition-all select-none *:[svg]:opacity-0 data-[selected=true]:*:[svg]:opacity-100 opacity-0 group-hover/fitem:opacity-100 group-focus/fitem:opacity-100 data-[selected=true]:opacity-100"
-      data-selected={checked}
-    >
-      <Check className="size-3.5 text-current" />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function getActiveFilterCount(state: {
-  statusFilters: string[];
-  priorityFilters: string[];
-  categoryFilters: string[];
+export function MyIssuesHeader({
+  allIssues,
+  workingAgents,
+  scope,
+  onScopeChange,
+  isRefreshing = false,
+  facetCountsExact = true,
+  tableFacetCounts,
+  onTableFacetChange,
+}: {
+  allIssues: Issue[];
+  /** See IssueSurfaceController.workingAgents. My Issues used to ask the
+   *  working-agents endpoint for its own relation-scoped count; the surface
+   *  projection now covers the relation AND every active filter. */
+  workingAgents: WorkingAgentSummary[] | undefined;
+  scope: MyIssuesScope;
+  onScopeChange: (scope: MyIssuesScope) => void;
+  isRefreshing?: boolean;
+  /** See IssueDisplayControls.facetCountsExact. */
+  facetCountsExact?: boolean;
+  tableFacetCounts?: IssueTableFacetsResponse;
+  onTableFacetChange: (facet: IssueTableFacetSpec | null) => void;
 }) {
-  let count = 0;
-  if (state.statusFilters.length > 0) count++;
-  if (state.priorityFilters.length > 0) count++;
-  if (state.categoryFilters.length > 0) count++;
-  return count;
-}
-
-function useIssueCounts(allIssues: Issue[]) {
-  return useMemo(() => {
-    const status = new Map<string, number>();
-    const priority = new Map<string, number>();
-    const category = new Map<string, number>();
-
-    for (const issue of allIssues) {
-      status.set(issue.status, (status.get(issue.status) ?? 0) + 1);
-      priority.set(issue.priority, (priority.get(issue.priority) ?? 0) + 1);
-      category.set(issue.category, (category.get(issue.category) ?? 0) + 1);
-    }
-
-    return { status, priority, category };
-  }, [allIssues]);
-}
-
-// ---------------------------------------------------------------------------
-// Scope config
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// MyIssuesHeader
-// ---------------------------------------------------------------------------
-
-export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const { t } = useT("my-issues");
+  const { t: tIssues } = useT("issues");
+  const [saveViewOpen, setSaveViewOpen] = useState(false);
+  const saveScope: SaveViewScope = { kind: "my", variant: SAVE_VARIANT[scope] };
+  const wsId = useWorkspaceId();
+  const { activeView, views, viewsReady, setActive, missing } = useActiveIssueView(
+    wsId,
+    { scope_type: "my" },
+  );
+  useEffect(() => {
+    if (missing) {
+      setActive(null);
+      toast.info(tIssues(($) => $.view_selector.unavailable));
+    }
+  }, [missing, setActive, tIssues]);
+  const viewBaseline = activeView ? baselineFromQuery(activeView.query) : undefined;
+  const [editTarget, setEditTarget] = useState<{
+    view: IssueView;
+    fromDefinition: boolean;
+  } | null>(null);
   const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
+    { value: "all", label: t(($) => $.header.scope.all_label), description: t(($) => $.header.scope.all_description) },
     { value: "assigned", label: t(($) => $.header.scope.assigned_label), description: t(($) => $.header.scope.assigned_description) },
     { value: "created", label: t(($) => $.header.scope.created_label), description: t(($) => $.header.scope.created_description) },
     { value: "agents", label: t(($) => $.header.scope.agents_label), description: t(($) => $.header.scope.agents_description) },
   ];
-  const viewMode = useStore(myIssuesViewStore, (s) => s.viewMode);
-  const statusFilters = useStore(myIssuesViewStore, (s) => s.statusFilters);
-  const priorityFilters = useStore(myIssuesViewStore, (s) => s.priorityFilters);
-  const categoryFilters = useStore(myIssuesViewStore, (s) => s.categoryFilters);
-  const sortBy = useStore(myIssuesViewStore, (s) => s.sortBy);
-  const sortDirection = useStore(myIssuesViewStore, (s) => s.sortDirection);
-  const cardProperties = useStore(myIssuesViewStore, (s) => s.cardProperties);
-  const act = myIssuesViewStore.getState();
-
-  const counts = useIssueCounts(allIssues);
-
-  const hasActiveFilters =
-    getActiveFilterCount({ statusFilters, priorityFilters, categoryFilters }) > 0;
-
-  const sortLabel =
-    SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? t(($) => $.header.sort_manual);
+  const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
+  const toggleAgentRunningFilter = useViewStore(
+    (s) => s.toggleAgentRunningFilter,
+  );
+  const scopeLabel = SCOPES.find((s) => s.value === scope)?.label ?? SCOPES[0]?.label;
 
   return (
-    <div className="flex h-12 shrink-0 items-center justify-between px-4">
-      <span className="text-sm text-muted-foreground">Assigned to you</span>
+    <>
+    <div className={cn("min-h-12 shrink-0 py-2 [-webkit-overflow-scrolling:touch]", PAGE_GUTTER)}>
+      <div className="flex w-full min-w-0 items-start justify-between gap-2">
+        <div className="hidden min-w-0 flex-1 md:block">
+          <ViewBar
+            wsId={wsId}
+            scope={{ scope_type: "my" }}
+            builtins={SCOPES.map((s) => ({
+              key: s.value,
+              label: s.label,
+              description: s.description,
+              active: !activeView && scope === s.value,
+              onSelect: () => {
+                if (activeView) setActive(null);
+                onScopeChange(s.value);
+              },
+            }))}
+            views={views}
+            viewsReady={viewsReady}
+            activeView={activeView}
+            onSelectView={(view) => setActive(view ? view.id : null)}
+            onNewView={() => {
+              setEditTarget(null);
+              setSaveViewOpen(true);
+            }}
+            onEditView={(view) => {
+              setEditTarget({ view, fromDefinition: true });
+              setSaveViewOpen(true);
+            }}
+          />
+        </div>
 
-      {/* Right: filter + display + view toggle */}
-      <div className="flex items-center gap-1">
-        {/* Filter */}
         <DropdownMenu>
-          <Tooltip>
-            <DropdownMenuTrigger
-              render={
-                <TooltipTrigger
-                  render={
-                    <Button variant="outline" size="icon-sm" className="relative text-muted-foreground">
-                      <Filter className="size-4" />
-                      {hasActiveFilters && (
-                        <span className="absolute top-0 right-0 size-1.5 rounded-full bg-brand" />
-                      )}
-                    </Button>
-                  }
-                />
-              }
-            />
-            <TooltipContent side="bottom">{t(($) => $.header.filter_button)}</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="w-auto">
-            {/* Category */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <Tag className="size-3.5" />
-                <span className="flex-1">Categories</span>
-                {categoryFilters.length > 0 && (
-                  <span className="text-xs text-primary font-medium">
-                    {categoryFilters.length}
-                  </span>
-                )}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-auto min-w-44">
-                {ISSUE_CATEGORIES.map((c) => {
-                  const checked = categoryFilters.includes(c);
-                  const count = counts.category.get(c) ?? 0;
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={c}
-                      checked={checked}
-                      onCheckedChange={() => act.toggleCategoryFilter(c)}
-                      className={FILTER_ITEM_CLASS}
-                    >
-                      <HoverCheck checked={checked} />
-                      <CategoryIcon category={c} className="h-3.5 w-3.5" />
-                      {CATEGORY_CONFIG[c].label}
-                      {count > 0 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {count} {count === 1 ? "issue" : "issues"}
-                        </span>
-                      )}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Status */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <CircleDot className="size-3.5" />
-                <span className="flex-1">{t(($) => $.header.filter_status)}</span>
-                {statusFilters.length > 0 && (
-                  <span className="text-xs text-primary font-medium">
-                    {statusFilters.length}
-                  </span>
-                )}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-auto min-w-48">
-                {ALL_STATUSES.map((s) => {
-                  const checked = statusFilters.includes(s);
-                  const count = counts.status.get(s) ?? 0;
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={s}
-                      checked={checked}
-                      onCheckedChange={() => act.toggleStatusFilter(s)}
-                      className={FILTER_ITEM_CLASS}
-                    >
-                      <HoverCheck checked={checked} />
-                      <StatusIcon status={s} className="h-3.5 w-3.5" />
-                      {STATUS_CONFIG[s].label}
-                      {count > 0 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {t(($) => $.header.issue_count, { count })}
-                        </span>
-                      )}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Priority */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <SignalHigh className="size-3.5" />
-                <span className="flex-1">{t(($) => $.header.filter_priority)}</span>
-                {priorityFilters.length > 0 && (
-                  <span className="text-xs text-primary font-medium">
-                    {priorityFilters.length}
-                  </span>
-                )}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="w-auto min-w-44">
-                {PRIORITY_ORDER.map((p) => {
-                  const checked = priorityFilters.includes(p);
-                  const count = counts.priority.get(p) ?? 0;
-                  return (
-                    <DropdownMenuCheckboxItem
-                      key={p}
-                      checked={checked}
-                      onCheckedChange={() => act.togglePriorityFilter(p)}
-                      className={FILTER_ITEM_CLASS}
-                    >
-                      <HoverCheck checked={checked} />
-                      <PriorityIcon priority={p} />
-                      {PRIORITY_CONFIG[p].label}
-                      {count > 0 && (
-                        <span className="ml-auto text-xs text-muted-foreground">
-                          {t(($) => $.header.issue_count, { count })}
-                        </span>
-                      )}
-                    </DropdownMenuCheckboxItem>
-                  );
-                })}
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-
-            {/* Reset */}
-            {hasActiveFilters && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={act.clearFilters}>
-                  {t(($) => $.header.reset_filters)}
-                </DropdownMenuItem>
-              </>
-            )}
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0 gap-1 text-muted-foreground md:hidden"
+              >
+                <span className="truncate">{scopeLabel}</span>
+                <ChevronDown className="size-3 text-muted-foreground" />
+              </Button>
+            }
+          />
+          <DropdownMenuContent align="start" className="w-auto">
+            <DropdownMenuRadioGroup
+              value={scope}
+              onValueChange={(value) => onScopeChange(value as MyIssuesScope)}
+            >
+              {SCOPES.map((s) => (
+                <DropdownMenuRadioItem key={s.value} value={s.value}>
+                  {s.label}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {/* Display settings */}
-        <Popover>
-          <Tooltip>
-            <PopoverTrigger
-              render={
-                <TooltipTrigger
-                  render={
-                    <Button variant="outline" size="icon-sm" className="text-muted-foreground">
-                      <SlidersHorizontal className="size-4" />
-                    </Button>
-                  }
-                />
-              }
-            />
-            <TooltipContent side="bottom">{t(($) => $.header.display_settings)}</TooltipContent>
-          </Tooltip>
-          <PopoverContent align="end" className="w-64 p-0">
-            <div className="border-b px-3 py-2.5">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t(($) => $.header.ordering)}
-              </span>
-              <div className="mt-2 flex items-center gap-1.5">
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="flex-1 justify-between text-xs"
-                      >
-                        {sortLabel}
-                        <ChevronDown className="size-3 text-muted-foreground" />
-                      </Button>
-                    }
-                  />
-                  <DropdownMenuContent align="start" className="w-auto">
-                    {SORT_OPTIONS.map((opt) => (
-                      <DropdownMenuItem
-                        key={opt.value}
-                        onClick={() => act.setSortBy(opt.value)}
-                      >
-                        {opt.label}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-                <Button
-                  variant="outline"
-                  size="icon-sm"
-                  onClick={() =>
-                    act.setSortDirection(
-                      sortDirection === "asc" ? "desc" : "asc",
-                    )
-                  }
-                  title={sortDirection === "asc" ? t(($) => $.header.ascending) : t(($) => $.header.descending)}
-                >
-                  {sortDirection === "asc" ? (
-                    <ArrowUp className="size-3.5" />
-                  ) : (
-                    <ArrowDown className="size-3.5" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            <div className="px-3 py-2.5">
-              <span className="text-xs font-medium text-muted-foreground">
-                {t(($) => $.header.card_properties)}
-              </span>
-              <div className="mt-2 space-y-2">
-                {CARD_PROPERTY_OPTIONS.map((opt) => (
-                  <label
-                    key={opt.key}
-                    className="flex cursor-pointer items-center justify-between"
-                  >
-                    <span className="text-sm">{opt.label}</span>
-                    <Switch
-                      size="sm"
-                      checked={cardProperties[opt.key]}
-                      onCheckedChange={() => act.toggleCardProperty(opt.key)}
-                    />
-                  </label>
-                ))}
-              </div>
-            </div>
-          </PopoverContent>
-        </Popover>
-
-        {/* View toggle */}
-        <DropdownMenu>
-          <Tooltip>
-            <DropdownMenuTrigger
-              render={
-                <TooltipTrigger
-                  render={
-                    <Button variant="outline" size="icon-sm" className="text-muted-foreground">
-                      {viewMode === "board" ? (
-                        <Columns3 className="size-4" />
-                      ) : (
-                        <List className="size-4" />
-                      )}
-                    </Button>
-                  }
-                />
-              }
-            />
-            <TooltipContent side="bottom">
-              {viewMode === "board" ? t(($) => $.header.view_board) : t(($) => $.header.view_list)}
-            </TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="w-auto">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{t(($) => $.header.view_label)}</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => act.setViewMode("board")}>
-                <Columns3 />
-                {t(($) => $.header.view_board_short)}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => act.setViewMode("list")}>
-                <List />
-                {t(($) => $.header.view_list_short)}
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <div className="flex shrink-0 items-center gap-1">
+          {agentRunningFilter && (
+            <span className="mr-1 hidden text-caption text-muted-foreground md:inline">
+              {tIssues(($) => $.agent_activity.filter_active_label)}
+            </span>
+          )}
+          <WorkspaceAgentWorkingChip
+            value={agentRunningFilter}
+            onToggle={toggleAgentRunningFilter}
+            agents={workingAgents}
+          />
+          <IssueDisplayControls
+            scopedIssues={allIssues}
+            facetCountsExact={facetCountsExact}
+            tableFacetCounts={tableFacetCounts}
+            onTableFacetChange={onTableFacetChange}
+            viewBaseline={viewBaseline}
+          />
+          <ViewRefreshIndicator active={isRefreshing} />
+        </div>
       </div>
     </div>
+    <FilterChipsBar
+      viewBaseline={viewBaseline}
+      saveLabel={activeView ? tIssues(($) => $.filters.chip_edit) : undefined}
+      onSave={() => {
+        setEditTarget(
+          activeView ? { view: activeView, fromDefinition: false } : null,
+        );
+        setSaveViewOpen(true);
+      }}
+    />
+    <SaveViewDialog
+      open={saveViewOpen}
+      onOpenChange={setSaveViewOpen}
+      scope={saveScope}
+      editView={editTarget?.view ?? null}
+      seedFromDefinition={editTarget?.fromDefinition ?? false}
+    />
+    </>
   );
 }

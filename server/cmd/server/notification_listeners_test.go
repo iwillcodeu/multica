@@ -71,7 +71,7 @@ func createTestSubIssue(t *testing.T, workspaceID, creatorID, parentIssueID stri
 func newNotificationBus(t *testing.T, queries *db.Queries) *events.Bus {
 	t.Helper()
 	bus := events.New()
-	registerSubscriberListeners(bus, queries)
+	registerSubscriberListeners(bus, testPool)
 	registerNotificationListeners(bus, queries)
 	return bus
 }
@@ -316,6 +316,65 @@ func TestNotification_StatusChanged(t *testing.T) {
 	}
 }
 
+// TestNotification_StatusChanged_Muted verifies that status_changes="muted"
+// prevents a new Inbox row without affecting other subscribers.
+func TestNotification_StatusChanged_Muted(t *testing.T) {
+	queries := db.New(testPool)
+	bus := newNotificationBus(t, queries)
+
+	mutedEmail := "notif-muted-status@multica.ai"
+	mutedID := createTestUser(t, mutedEmail)
+	t.Cleanup(func() { cleanupTestUser(t, mutedEmail) })
+
+	normalEmail := "notif-normal-status@multica.ai"
+	normalID := createTestUser(t, normalEmail)
+	t.Cleanup(func() { cleanupTestUser(t, normalEmail) })
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO notification_preference (workspace_id, user_id, preferences)
+		VALUES ($1, $2, '{"status_changes":"muted"}'::jsonb)
+	`, testWorkspaceID, mutedID); err != nil {
+		t.Fatalf("seed muted notification preference: %v", err)
+	}
+
+	addTestSubscriber(t, issueID, "member", mutedID, "commenter")
+	addTestSubscriber(t, issueID, "member", normalID, "commenter")
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:          issueID,
+				WorkspaceID: testWorkspaceID,
+				Title:       "muted status test issue",
+				Status:      "in_progress",
+				Priority:    "medium",
+				CreatorType: "member",
+				CreatorID:   testUserID,
+			},
+			"assignee_changed": false,
+			"status_changed":   true,
+			"prev_status":      "todo",
+		},
+	})
+
+	if items := inboxItemsForRecipient(t, queries, mutedID); len(items) != 0 {
+		t.Fatalf("expected muted subscriber to receive 0 items, got %d", len(items))
+	}
+	if items := inboxItemsForRecipient(t, queries, normalID); len(items) != 1 {
+		t.Fatalf("expected normal subscriber to receive 1 item, got %d", len(items))
+	}
+}
+
 // TestNotification_CommentCreated verifies that all subscribers except the
 // commenter receive a "new_comment" notification.
 func TestNotification_CommentCreated(t *testing.T) {
@@ -388,6 +447,105 @@ func TestNotification_CommentCreated(t *testing.T) {
 	}
 }
 
+// TestNotification_SystemCommentSkipsInboxAndMentions guards the MUL-2538
+// must-fix: a comment with author_type='system' (the platform-generated
+// child-done parent notify) must NOT create any inbox rows for parent
+// subscribers and must NOT spawn mention-inbox rows even if the body string
+// contains markdown mentions. The reviewer's concern was that a child title
+// containing `mention://member/<uuid>` would silently light up that member's
+// inbox once the title was transcluded into the system comment body —
+// because the generic comment:created listener treated all comments
+// identically. The fix is to gate at author_type='system'.
+func TestNotification_SystemCommentSkipsInboxAndMentions(t *testing.T) {
+	queries := db.New(testPool)
+	bus := newNotificationBus(t, queries)
+
+	// Subscriber on the issue who would normally receive new_comment.
+	subEmail := "notif-system-comment-sub@multica.ai"
+	subID := createTestUser(t, subEmail)
+	t.Cleanup(func() { cleanupTestUser(t, subEmail) })
+
+	// A second member whose UUID we will smuggle into the system-comment
+	// body as a fake mention to prove the listener does not parse it.
+	targetEmail := "notif-system-comment-target@multica.ai"
+	targetID := createTestUser(t, targetEmail)
+	t.Cleanup(func() { cleanupTestUser(t, targetEmail) })
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	addTestSubscriber(t, issueID, "member", subID, "manual")
+
+	// Publish a system-authored comment that transcludes a member mention
+	// in the body — the exact attack vector the reviewer flagged. If the
+	// generic listener path runs, the new_comment row will fire for `sub`
+	// and the mention path will fire for `target`.
+	bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload: map[string]any{
+			"comment": handler.CommentResponse{
+				ID:         "00000000-0000-0000-0000-000000000000",
+				IssueID:    issueID,
+				AuthorType: "system",
+				AuthorID:   "00000000-0000-0000-0000-000000000000",
+				Content:    "Sub-issue done — see [@Target](mention://member/" + targetID + ").",
+				Type:       "system",
+			},
+			"issue_title":  "system comment isolation",
+			"issue_status": "in_progress",
+		},
+	})
+
+	if items := inboxItemsForRecipient(t, queries, subID); len(items) != 0 {
+		t.Errorf("expected 0 inbox rows for issue subscriber, got %d", len(items))
+	}
+	if items := inboxItemsForRecipient(t, queries, targetID); len(items) != 0 {
+		t.Errorf("expected 0 inbox rows for smuggled @mention target, got %d", len(items))
+	}
+}
+
+// TestSubscriberSystemCommentDoesNotSubscribe guards the same boundary on
+// the subscriber listener: a system-authored comment must NOT be treated as
+// "a commenter joined the conversation." The CHECK constraint on
+// issue_subscriber.user_type only permits ('member','agent'); without the
+// author_type='system' early-return, AddIssueSubscriber would log a noisy
+// constraint violation on every child-done event.
+func TestSubscriberSystemCommentDoesNotSubscribe(t *testing.T) {
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, testPool)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() { cleanupTestIssue(t, issueID) })
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventCommentCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "system",
+		ActorID:     "",
+		Payload: map[string]any{
+			"comment": handler.CommentResponse{
+				ID:         "00000000-0000-0000-0000-000000000000",
+				IssueID:    issueID,
+				AuthorType: "system",
+				AuthorID:   "00000000-0000-0000-0000-000000000000",
+				Content:    "platform notify",
+				Type:       "system",
+			},
+		},
+	})
+
+	if count := subscriberCount(t, queries, issueID); count != 0 {
+		t.Fatalf("expected 0 subscribers after system comment, got %d", count)
+	}
+}
+
 // TestNotification_AssigneeChanged verifies the full assignee change flow:
 // - New assignee gets "issue_assigned" (Direct)
 // - Old assignee gets "unassigned" (Direct)
@@ -439,8 +597,8 @@ func TestNotification_AssigneeChanged(t *testing.T) {
 				AssigneeType: &newAssigneeType,
 				AssigneeID:   &newAssigneeID,
 			},
-			"assignee_changed":  true,
-			"status_changed":    false,
+			"assignee_changed":   true,
+			"status_changed":     false,
 			"prev_assignee_type": &oldAssigneeType,
 			"prev_assignee_id":   &oldAssigneeID,
 		},
@@ -654,7 +812,7 @@ func TestNotification_DueDateChanged(t *testing.T) {
 	addTestSubscriber(t, issueID, "member", testUserID, "creator")
 	addTestSubscriber(t, issueID, "member", sub1ID, "assignee")
 
-	dueDate := "2026-04-15T00:00:00Z"
+	dueDate := "2026-04-15"
 	bus.Publish(events.Event{
 		Type:        protocol.EventIssueUpdated,
 		WorkspaceID: testWorkspaceID,
@@ -690,6 +848,66 @@ func TestNotification_DueDateChanged(t *testing.T) {
 	}
 	if sub1Items[0].Type != "due_date_changed" {
 		t.Fatalf("expected type 'due_date_changed', got %q", sub1Items[0].Type)
+	}
+	if sub1Items[0].Severity != "info" {
+		t.Fatalf("expected severity 'info', got %q", sub1Items[0].Severity)
+	}
+}
+
+// TestNotification_StartDateChanged verifies that subscribers (except the actor)
+// receive a "start_date_changed" notification when an issue start date changes.
+func TestNotification_StartDateChanged(t *testing.T) {
+	queries := db.New(testPool)
+	bus := newNotificationBus(t, queries)
+
+	sub1Email := "notif-sub1-startdate@multica.ai"
+	sub1ID := createTestUser(t, sub1Email)
+	t.Cleanup(func() { cleanupTestUser(t, sub1Email) })
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	addTestSubscriber(t, issueID, "member", testUserID, "creator")
+	addTestSubscriber(t, issueID, "member", sub1ID, "assignee")
+
+	startDate := "2026-04-01"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:          issueID,
+				WorkspaceID: testWorkspaceID,
+				Title:       "start date test issue",
+				Status:      "todo",
+				Priority:    "medium",
+				CreatorType: "member",
+				CreatorID:   testUserID,
+				StartDate:   &startDate,
+			},
+			"assignee_changed":   false,
+			"status_changed":     false,
+			"start_date_changed": true,
+		},
+	})
+
+	// Actor should NOT get a notification
+	actorItems := inboxItemsForRecipient(t, queries, testUserID)
+	if len(actorItems) != 0 {
+		t.Fatalf("expected 0 inbox items for actor, got %d", len(actorItems))
+	}
+
+	sub1Items := inboxItemsForRecipient(t, queries, sub1ID)
+	if len(sub1Items) != 1 {
+		t.Fatalf("expected 1 inbox item for sub1, got %d", len(sub1Items))
+	}
+	if sub1Items[0].Type != "start_date_changed" {
+		t.Fatalf("expected type 'start_date_changed', got %q", sub1Items[0].Type)
 	}
 	if sub1Items[0].Severity != "info" {
 		t.Fatalf("expected severity 'info', got %q", sub1Items[0].Severity)

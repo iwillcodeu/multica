@@ -3,7 +3,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { childIssuesOptions } from "@multica/core/issues/queries";
+import {
+  childIssuesOptions,
+} from "@multica/core/issues/queries";
 import { useUpdateIssue } from "@multica/core/issues/mutations";
 import { IssuePickerModal } from "./issue-picker-modal";
 import { useT } from "../i18n";
@@ -38,10 +40,25 @@ export function SetParentIssueModal({
       excludeIds={excludeIds}
       onSelect={(selected) => {
         updateIssue.mutate(
-          { id: issueId, parent_issue_id: selected.id },
-          { onError: () => toast.error(t(($) => $.set_parent.toast_failed)) },
+          {
+            id: issueId,
+            parent_issue_id: selected.id,
+          },
+          {
+            onSuccess: () =>
+              toast.success(
+                t(($) => $.set_parent.toast_success, {
+                  identifier: selected.identifier,
+                }),
+              ),
+            onError: (err) =>
+              toast.error(
+                err instanceof Error && err.message
+                  ? err.message
+                  : t(($) => $.set_parent.toast_failed),
+              ),
+          },
         );
-        toast.success(t(($) => $.set_parent.toast_success, { identifier: selected.identifier }));
       }}
     />
   );

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Issue } from "@multica/core/types";
+import { buildIssueStatusCatalog } from "@multica/core/issue-statuses";
+import type { Issue, IssueStatusEntry } from "@multica/core/types";
 
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "ws-1",
@@ -27,20 +28,6 @@ vi.mock("@multica/core/auth", () => ({
   registerAuthStore: vi.fn(),
 }));
 
-vi.mock("@multica/core/workspace/queries", () => ({
-  memberListOptions: () => ({
-    queryKey: ["workspaces", "ws-1", "members"],
-    queryFn: () =>
-      Promise.resolve([
-        { user_id: "user-1", name: "Test User", email: "t@t.com", role: "admin" },
-      ]),
-  }),
-  agentListOptions: () => ({
-    queryKey: ["workspaces", "ws-1", "agents"],
-    queryFn: () => Promise.resolve([]),
-  }),
-}));
-
 // Mutable so individual tests can seed the pin list.
 const pinListRef: { value: Array<{ item_type: string; item_id: string }> } = {
   value: [],
@@ -61,6 +48,38 @@ vi.mock("@multica/core/issues/mutations", () => ({
   useUpdateIssue: () => ({ mutate: mockUpdateMutate }),
 }));
 
+// The status catalog is server state; this suite only needs it to answer which
+// CATEGORY a key belongs to, so the entries are fed in directly. `later` parks
+// like Backlog and `rework` starts work like Todo — the two cases a raw
+// `status === "backlog"` / `=== "todo"` comparison gets wrong (MUL-6463).
+const catalogEntries: IssueStatusEntry[] = [
+  ...(["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"] as const).map(
+    (key, i) => statusEntry({ id: key, key, name: key, category: key, is_system: true, position: i }),
+  ),
+  statusEntry({ id: "later", key: "later", name: "Later", category: "backlog", position: 7 }),
+  statusEntry({ id: "rework", key: "rework", name: "Rework", category: "todo", position: 8 }),
+];
+function statusEntry(overrides: Partial<IssueStatusEntry>): IssueStatusEntry {
+  return {
+    id: "id",
+    workspace_id: "ws-1",
+    key: "custom",
+    name: "Custom",
+    description: "",
+    category: "todo",
+    color: "#22c55e",
+    is_system: false,
+    position: 0,
+    archived_at: null,
+    created_at: "",
+    updated_at: "",
+    ...overrides,
+  };
+}
+vi.mock("@multica/core/issue-statuses/hooks", () => ({
+  useIssueStatuses: () => buildIssueStatusCatalog(catalogEntries),
+}));
+
 vi.mock("@multica/core/paths", async () => {
   const actual = await vi.importActual<typeof import("@multica/core/paths")>(
     "@multica/core/paths",
@@ -77,6 +96,7 @@ vi.mock("../../../navigation", () => ({
     push: vi.fn(),
     pathname: "/test/issues/issue-1",
     searchParams: new URLSearchParams(),
+    hash: "",
     back: vi.fn(),
     replace: vi.fn(),
     getShareableUrl: (p: string) => `https://app.multica.com${p}`,
@@ -88,6 +108,7 @@ vi.mock("sonner", () => ({
 }));
 
 // Import AFTER mocks are registered.
+import { toast } from "sonner";
 import { useIssueActions } from "../use-issue-actions";
 
 const mockIssue: Issue = {
@@ -104,6 +125,7 @@ const mockIssue: Issue = {
   creator_type: "member",
   creator_id: "user-1",
   parent_issue_id: null,
+  start_date: null,
   due_date: null,
   project_id: null,
   created_at: "2026-01-01T00:00:00Z",
@@ -122,6 +144,8 @@ beforeEach(() => {
   mockUpdateMutate.mockReset();
   mockCreatePinMutate.mockReset();
   mockDeletePinMutate.mockReset();
+  vi.mocked(toast.success).mockReset();
+  vi.mocked(toast.error).mockReset();
   pinListRef.value = [];
   localStorage.clear();
   Object.defineProperty(navigator, "clipboard", {
@@ -144,9 +168,8 @@ describe("useIssueActions", () => {
     );
   });
 
-  it("assigning an agent to a backlog issue opens the backlog-hint modal", () => {
-    const backlogIssue = { ...mockIssue, status: "backlog" } as Issue;
-    const { result } = renderHook(() => useIssueActions(backlogIssue), { wrapper });
+  it("assigning an agent routes through the run-confirm modal instead of mutating directly", () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
 
     act(() => {
       result.current.updateField({
@@ -155,13 +178,16 @@ describe("useIssueActions", () => {
       });
     });
 
-    expect(mockOpenModal).toHaveBeenCalledWith("issue-backlog-agent-hint", {
-      issueId: "issue-1",
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-run-confirm", {
+      issueIds: ["issue-1"],
+      mode: "assign",
+      assigneeType: "agent",
+      assigneeId: "agent-1",
     });
+    expect(mockUpdateMutate).not.toHaveBeenCalled();
   });
 
-  it("does not re-open backlog-hint when the user has dismissed it", () => {
-    localStorage.setItem("multica:backlog-agent-hint-dismissed", "true");
+  it("assigning an agent to a backlog issue applies directly — backlog never starts a run", () => {
     const backlogIssue = { ...mockIssue, status: "backlog" } as Issue;
     const { result } = renderHook(() => useIssueActions(backlogIssue), { wrapper });
 
@@ -172,11 +198,87 @@ describe("useIssueActions", () => {
       });
     });
 
+    expect(mockUpdateMutate).toHaveBeenCalledWith(
+      { id: "issue-1", assignee_type: "agent", assignee_id: "agent-1" },
+      expect.any(Object),
+    );
     expect(mockOpenModal).not.toHaveBeenCalled();
   });
 
-  it("copyLink writes the issue's shareable URL to the clipboard", async () => {
+  // Which writes need confirming is decided by runConfirmIntent, whose matrix
+  // (parked / unresolvable categories, every promotion target) is canonical in
+  // ../run-confirm-gate.test.ts. These two only prove the hook routes on it.
+  it("promoting an agent-owned parked issue routes through the run-confirm modal", () => {
+    const parked = {
+      ...mockIssue,
+      status: "backlog",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(parked), { wrapper });
+
+    act(() => {
+      result.current.updateField({ status: "rework" });
+    });
+
+    expect(mockOpenModal).toHaveBeenCalledWith("issue-run-confirm", {
+      issueIds: ["issue-1"],
+      mode: "promote",
+      status: "rework",
+      assigneeType: "agent",
+      assigneeId: "agent-1",
+    });
+    expect(mockUpdateMutate).not.toHaveBeenCalled();
+  });
+
+  it("a status change that starts no run applies directly", () => {
     const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+
+    act(() => {
+      result.current.updateField({ status: "in_progress" });
+    });
+
+    expect(mockUpdateMutate).toHaveBeenCalledWith(
+      { id: "issue-1", status: "in_progress" },
+      expect.any(Object),
+    );
+    expect(mockOpenModal).not.toHaveBeenCalled();
+  });
+
+  it("assigning a member applies directly without the run-confirm modal", () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+
+    act(() => {
+      result.current.updateField({
+        assignee_type: "member",
+        assignee_id: "user-1",
+      });
+    });
+
+    expect(mockUpdateMutate).toHaveBeenCalledWith(
+      { id: "issue-1", assignee_type: "member", assignee_id: "user-1" },
+      expect.any(Object),
+    );
+    expect(mockOpenModal).not.toHaveBeenCalled();
+  });
+
+  it("copyLink writes the issue's human-readable shareable URL to the clipboard", async () => {
+    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
+
+    await act(async () => {
+      await result.current.copyLink();
+    });
+
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      "https://app.multica.com/test/issues/TES-1",
+    );
+  });
+
+  it("copyLink falls back to the UUID when the issue has no identifier", async () => {
+    const { result } = renderHook(
+      () => useIssueActions({ ...mockIssue, identifier: "" } as Issue),
+      { wrapper },
+    );
 
     await act(async () => {
       await result.current.copyLink();
@@ -213,13 +315,112 @@ describe("useIssueActions", () => {
     });
 
     act(() => {
-      result.current.openDeleteConfirm({ onDeletedNavigateTo: "/test/issues" });
+      result.current.openDeleteConfirm({ onDeletedFallbackPath: "/test/issues" });
     });
     expect(mockOpenModal).toHaveBeenLastCalledWith("issue-delete-confirm", {
       issueId: "issue-1",
       identifier: "TES-1",
-      onDeletedNavigateTo: "/test/issues",
+      onDeletedFallbackPath: "/test/issues",
     });
+  });
+
+  it("openCreateSubIssue seeds the parent's project and assignee so the sub-issue inherits them", () => {
+    const parentIssue = {
+      ...mockIssue,
+      project_id: "project-1",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(parentIssue), { wrapper });
+
+    act(() => {
+      result.current.openCreateSubIssue();
+    });
+
+    expect(mockOpenModal).toHaveBeenLastCalledWith("create-issue", {
+      parent_issue_id: "issue-1",
+      parent_issue_identifier: "TES-1",
+      project_id: "project-1",
+      assignee_type: "agent",
+      assignee_id: "agent-1",
+    });
+  });
+
+  it("openCreateSubIssue omits assignee when the parent has none", () => {
+    const parentIssue = {
+      ...mockIssue,
+      project_id: "project-1",
+      assignee_type: null,
+      assignee_id: null,
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(parentIssue), { wrapper });
+
+    act(() => {
+      result.current.openCreateSubIssue();
+    });
+
+    expect(mockOpenModal).toHaveBeenLastCalledWith("create-issue", {
+      parent_issue_id: "issue-1",
+      parent_issue_identifier: "TES-1",
+      project_id: "project-1",
+    });
+  });
+
+  it("removeParent clears parent_issue_id and stage in one write, never via the run-confirm modal", () => {
+    const childIssue = {
+      ...mockIssue,
+      parent_issue_id: "parent-1",
+      stage: 2,
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(childIssue), { wrapper });
+
+    act(() => {
+      result.current.removeParent();
+    });
+
+    expect(mockUpdateMutate).toHaveBeenCalledWith(
+      { id: "issue-1", parent_issue_id: null, stage: null },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    // Detaching never routes through the run-confirm modal.
+    expect(mockOpenModal).not.toHaveBeenCalled();
+  });
+
+  it("removeParent toasts success only from onSuccess — not eagerly, and not on failure", () => {
+    const childIssue = {
+      ...mockIssue,
+      parent_issue_id: "parent-1",
+    } as Issue;
+    const { result } = renderHook(() => useIssueActions(childIssue), { wrapper });
+
+    act(() => {
+      result.current.removeParent();
+    });
+
+    // mutate() is fire-and-forget here (mocked), so nothing is confirmed yet.
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(mockUpdateMutate).toHaveBeenCalledTimes(1);
+
+    const opts = mockUpdateMutate.mock.calls[0]![1] as {
+      onSuccess: () => void;
+      onError: (err: unknown) => void;
+    };
+
+    // A failed write surfaces the error, never a false "removed" confirmation.
+    act(() => {
+      opts.onError(new Error("forbidden"));
+    });
+    expect(toast.error).toHaveBeenCalledWith("forbidden");
+    expect(toast.success).not.toHaveBeenCalled();
+
+    // Only the server-confirmed success toasts.
+    act(() => {
+      opts.onSuccess();
+    });
+    expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
   it("togglePin calls createPin when not pinned and deletePin when pinned", async () => {
@@ -267,12 +468,4 @@ describe("useIssueActions", () => {
     expect(mockOpenModal).not.toHaveBeenCalled();
   });
 
-  it("members and filtered agents are exposed on the result", async () => {
-    const { result } = renderHook(() => useIssueActions(mockIssue), { wrapper });
-    await waitFor(() => {
-      expect(result.current.members.length).toBe(1);
-    });
-    expect(result.current.members[0]!.user_id).toBe("user-1");
-    expect(result.current.agents).toEqual([]);
-  });
 });

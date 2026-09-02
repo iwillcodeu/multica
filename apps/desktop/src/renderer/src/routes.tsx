@@ -1,31 +1,68 @@
 import { useEffect } from "react";
-import {
-  createMemoryRouter,
-  Navigate,
-  Outlet,
-  useMatches,
-} from "react-router-dom";
+import { createMemoryRouter, Outlet, useMatches } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
 import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
 import { AgentDetailPage } from "./pages/agent-detail-page";
-import { RuntimeDetailPage } from "./pages/runtime-detail-page";
+import { AiBuilderSessionPage } from "./pages/ai-builder-session-page";
+import { MemberDetailPage } from "./pages/member-detail-page";
+import {
+  RuntimeDetailPage,
+  RuntimeSettingsPage,
+} from "./pages/runtime-detail-page";
+import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
+import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
-import { AgentsPage } from "@multica/views/agents";
+import { DesktopAgentsPage } from "./components/desktop-agents-page";
+import {
+  AiCreateAgentPage,
+  ChooseCreateMethodPage,
+  ManualCreateAgentPage,
+} from "@multica/views/agents";
+import { SquadsPage, SquadDetailPage as SquadDetailPageView } from "@multica/views/squads/components";
 import { InboxPage } from "@multica/views/inbox";
+import { ChatPage } from "@multica/views/chat";
 import { SettingsPage } from "@multica/views/settings";
-import { ErrorBoundary } from "@multica/ui/components/common/error-boundary";
+import { useT } from "@multica/views/i18n";
 import { Download, Server } from "lucide-react";
 import { DaemonSettingsTab } from "./components/daemon-settings-tab";
 import { UpdatesSettingsTab } from "./components/updates-settings-tab";
 import { WorkspaceRouteLayout } from "./components/workspace-route-layout";
+import { DesktopRouteErrorPage } from "./components/route-error-page";
+
+/**
+ * Wraps `SettingsPage` so the desktop-only extra tabs can pull their labels
+ * from i18n. The route element has to be a component (not a literal JSX
+ * value) for `useT` to run.
+ */
+function DesktopSettingsRoute() {
+  const { t } = useT("settings");
+  return (
+    <SettingsPage
+      extraAccountTabs={[
+        {
+          value: "daemon",
+          label: "Daemon",
+          icon: Server,
+          content: <DaemonSettingsTab />,
+        },
+        {
+          value: "updates",
+          label: t(($) => $.desktop.tabs.updates),
+          icon: Download,
+          content: <UpdatesSettingsTab />,
+        },
+      ]}
+    />
+  );
+}
 
 /**
  * Sets document.title from the deepest matched route's handle.title.
@@ -77,20 +114,22 @@ function PageShell() {
 export const appRoutes: RouteObject[] = [
   {
     element: <PageShell />,
+    errorElement: <DesktopRouteErrorPage />,
     children: [
       { index: true, element: null },
       {
         path: ":workspaceSlug",
         element: <WorkspaceRouteLayout />,
         children: [
-          { index: true, element: <Navigate to="issues" replace /> },
+          // A bare `/{slug}` URL is normalized to `/{slug}/issues` by
+          // sanitizeTabPath before it ever becomes a session, so the index
+          // route is unreachable in practice; null keeps it a harmless
+          // safety net instead of an in-router <Navigate> (MUL-4741
+          // invariant 1: the router never self-navigates).
+          { index: true, element: null },
           {
             path: "issues",
-            element: (
-              <ErrorBoundary>
-                <IssuesPage />
-              </ErrorBoundary>
-            ),
+            element: <IssuesPage />,
             handle: { title: "Issues" },
           },
           {
@@ -131,6 +170,11 @@ export const appRoutes: RouteObject[] = [
           {
             path: "runtimes/:id",
             element: <RuntimeDetailPage />,
+            handle: { title: "Machine" },
+          },
+          {
+            path: "runtimes/:id/runtime/:runtimeId",
+            element: <RuntimeSettingsPage />,
             handle: { title: "Runtime" },
           },
           { path: "skills", element: <SkillsPage />, handle: { title: "Skills" } },
@@ -139,33 +183,58 @@ export const appRoutes: RouteObject[] = [
             element: <SkillDetailPage />,
             handle: { title: "Skill" },
           },
-          { path: "agents", element: <AgentsPage />, handle: { title: "Agents" } },
+          { path: "agents", element: <DesktopAgentsPage />, handle: { title: "Agents" } },
+          {
+            path: "agents/new",
+            element: <ChooseCreateMethodPage />,
+            handle: { title: "Create Agent" },
+          },
+          {
+            path: "agents/new/manual",
+            element: <ManualCreateAgentPage />,
+            handle: { title: "Create Agent" },
+          },
+          {
+            path: "agents/new/ai",
+            element: <AiCreateAgentPage />,
+            handle: { title: "Create Agent" },
+          },
+          {
+            path: "agents/new/ai/:sessionId",
+            element: <AiBuilderSessionPage />,
+            handle: { title: "Create Agent" },
+          },
           {
             path: "agents/:id",
             element: <AgentDetailPage />,
             handle: { title: "Agent" },
           },
+          {
+            path: "members/:id",
+            element: <MemberDetailPage />,
+            handle: { title: "Member" },
+          },
+          { path: "squads", element: <SquadsPage />, handle: { title: "Squads" } },
+          {
+            path: "squads/:id",
+            element: <SquadDetailPageView />,
+            handle: { title: "Squad" },
+          },
           { path: "inbox", element: <InboxPage />, handle: { title: "Inbox" } },
+          { path: "chat", element: <ChatPage />, handle: { title: "Chat" } },
+          {
+            path: "attachments/:id/preview",
+            element: <AttachmentPreviewRoute />,
+            handle: { title: "Attachment" },
+          },
+          {
+            path: "usage",
+            element: <DashboardPage />,
+            handle: { title: "Usage" },
+          },
           {
             path: "settings",
-            element: (
-              <SettingsPage
-                extraAccountTabs={[
-                  {
-                    value: "daemon",
-                    label: "Daemon",
-                    icon: Server,
-                    content: <DaemonSettingsTab />,
-                  },
-                  {
-                    value: "updates",
-                    label: "Updates",
-                    icon: Download,
-                    content: <UpdatesSettingsTab />,
-                  },
-                ]}
-              />
-            ),
+            element: <DesktopSettingsRoute />,
             handle: { title: "Settings" },
           },
         ],
@@ -174,9 +243,13 @@ export const appRoutes: RouteObject[] = [
   },
 ];
 
-/** Create an independent memory router for a tab. */
-export function createTabRouter(initialPath: string) {
+/**
+ * Create THE app router (MUL-4741 single-router session architecture).
+ * There is exactly one instance, owned by the tab Coordinator; it projects
+ * the active tab session's URL and is never navigated by anything else.
+ */
+export function createAppRouter() {
   return createMemoryRouter(appRoutes, {
-    initialEntries: [initialPath],
+    initialEntries: ["/"],
   });
 }

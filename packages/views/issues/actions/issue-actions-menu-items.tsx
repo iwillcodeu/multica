@@ -1,32 +1,38 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
   Calendar,
+  CalendarClock,
+  ExternalLink,
   FolderOpen,
   Link2,
-  MoreHorizontal,
+  Network,
   Pin,
   PinOff,
   Plus,
   Trash2,
+  Unlink,
   UserMinus,
 } from "lucide-react";
-import type { AgentTask, Issue } from "@multica/core/types";
+import type { Issue } from "@multica/core/types";
+import { resolveWorkdirCopyTarget } from "@multica/core/issues";
+import { todayDateOnly, addDaysDateOnly } from "@multica/core/issues/date";
 import { api } from "@multica/core/api";
 import {
-  ALL_STATUSES,
-  PRIORITY_ORDER,
+  PRIORITY_DISPLAY_ORDER,
   PRIORITY_CONFIG,
 } from "@multica/core/issues/config";
+import { useWorkspaceId } from "@multica/core/hooks";
+import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
+import { useStatusOptions } from "../utils/status-options";
 import { issueKeys } from "@multica/core/issues/queries";
 import { StatusIcon } from "../components/status-icon";
 import { PriorityIcon } from "../components/priority-icon";
-import { ActorAvatar } from "../../common/actor-avatar";
 import {
   DropdownMenuItem,
   DropdownMenuSub,
@@ -41,7 +47,9 @@ import {
   ContextMenuSubContent,
   ContextMenuSeparator,
 } from "@multica/ui/components/ui/context-menu";
+import { copyText } from "@multica/ui/lib/clipboard";
 import type { UseIssueActionsResult } from "./use-issue-actions";
+import { PluginHookMenuItems, PluginModalMenuItems } from "../../plugins";
 import { useT } from "../../i18n";
 
 // Both Dropdown and Context menu wrappers expose an API-compatible surface
@@ -78,36 +86,41 @@ interface IssueActionsMenuItemsProps {
   issue: Issue;
   actions: UseIssueActionsResult;
   primitives: MenuPrimitives;
-  /** If set, navigate here after the issue is deleted (used by the detail page). */
-  onDeletedNavigateTo?: string;
+  /** Called when the user clicks the Assignee menu item. The parent should
+   *  close the surrounding menu and open the shared `AssigneePicker` popover.
+   *  Decoupled this way so the same item can drive both the dropdown
+   *  (3-dot button) and the context menu (right-click) wrappers. */
+  onOpenAssignee: () => void;
+  /** If set, leave the page after the issue is deleted (used by the detail
+   *  page, which renders the issue being deleted). The delete modal goes back
+   *  to the list the user came from and only falls back to this path when
+   *  there is no in-app history. List surfaces leave it unset and stay put. */
+  onDeletedFallbackPath?: string;
 }
 
 export function IssueActionsMenuItems({
   issue,
   actions,
   primitives: P,
-  onDeletedNavigateTo,
+  onOpenAssignee,
+  onDeletedFallbackPath,
 }: IssueActionsMenuItemsProps) {
   const { t } = useT("issues");
+  const wsId = useWorkspaceId();
+  const statusOptions = useStatusOptions(wsId);
+  const { categoryOf, colorOf } = useIssueStatuses(wsId);
   const {
-    members,
-    agents,
     isPinned,
     updateField,
+    openInNewTab,
     togglePin,
     copyLink,
     openCreateSubIssue,
     openSetParent,
+    removeParent,
     openAddChild,
     openDeleteConfirm,
   } = actions;
-
-  const now = () => new Date();
-  const inDays = (days: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    return d.toISOString();
-  };
 
   // Subscribe to the issue's task list so the cache is warm by the time the
   // user clicks "Copy local workdir path". The query only fires while the
@@ -122,6 +135,10 @@ export function IssueActionsMenuItems({
     queryFn: () => api.listTasksByIssue(issue.id),
     staleTime: 30_000,
   });
+  const workdirCopyTarget = useMemo(
+    () => resolveWorkdirCopyTarget(tasks),
+    [tasks],
+  );
 
   // Synchronous click handler — the awaited fetch in the previous version
   // dropped the browser's transient user activation, which made
@@ -129,32 +146,61 @@ export function IssueActionsMenuItems({
   // was cold. We now read straight from the cached query result and write
   // to the clipboard inside the same task as the click.
   const handleCopyWorkdirPath = useCallback(() => {
-    const latestWorkDir = pickLatestWorkDir(tasks);
-    if (!latestWorkDir) {
+    if (!workdirCopyTarget) {
       toast.error(t(($) => $.detail.workdir_path_unavailable));
       return;
     }
-    navigator.clipboard.writeText(latestWorkDir).then(
-      () => toast.success(t(($) => $.detail.workdir_path_copied)),
-      () => toast.error(t(($) => $.detail.workdir_path_copy_failed)),
-    );
-  }, [tasks, t]);
+    void copyText(workdirCopyTarget.path).then((ok) => {
+      if (!ok) {
+        toast.error(t(($) => $.detail.workdir_path_copy_failed));
+        return;
+      }
+      if (workdirCopyTarget.source === "durable_project_directory") {
+        toast.success(
+          workdirCopyTarget.branchName
+            ? t(($) => $.detail.project_directory_path_copied_with_branch, {
+                branch: workdirCopyTarget.branchName,
+              })
+            : t(($) => $.detail.project_directory_path_copied),
+        );
+        return;
+      }
+      toast.success(t(($) => $.detail.workdir_path_copied));
+    });
+  }, [workdirCopyTarget, t]);
 
   return (
     <>
       {/* Status */}
       <P.Sub>
         <P.SubTrigger>
-          <StatusIcon status={issue.status} className="h-3.5 w-3.5" />
+          <StatusIcon
+            status={issue.status}
+            category={categoryOf(issue.status)}
+            color={colorOf(issue.status)}
+            className="h-3.5 w-3.5"
+          />
           {t(($) => $.actions.status)}
         </P.SubTrigger>
         <P.SubContent>
-          {ALL_STATUSES.map((s) => (
-            <P.Item key={s} onClick={() => updateField({ status: s })}>
-              <StatusIcon status={s} className="h-3.5 w-3.5" />
-              {t(($) => $.status[s])}
-              {issue.status === s && (
-                <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
+          {/* Catalog-driven, like the picker and the filter: every entry point
+              that can change a status must offer the same set, or a custom
+              status is unreachable from the board's right-click menu. One flat
+              list in canonical category order. (MUL-6243) */}
+          {statusOptions.map((option) => (
+            <P.Item
+              key={option.key}
+              onClick={() => updateField({ status: option.key })}
+            >
+              <StatusIcon
+                status={option.key}
+                category={option.category}
+                color={option.color}
+                className="h-3.5 w-3.5"
+              />
+              {option.label}
+              {issue.status === option.key && (
+                <span className="ml-auto text-caption text-muted-foreground">{"✓"}</span>
               )}
             </P.Item>
           ))}
@@ -168,69 +214,56 @@ export function IssueActionsMenuItems({
           {t(($) => $.actions.priority)}
         </P.SubTrigger>
         <P.SubContent>
-          {PRIORITY_ORDER.map((p) => (
+          {PRIORITY_DISPLAY_ORDER.map((p) => (
             <P.Item key={p} onClick={() => updateField({ priority: p })}>
               <span
-                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}
+                className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-caption font-medium ${PRIORITY_CONFIG[p].badgeBg} ${PRIORITY_CONFIG[p].badgeText}`}
               >
                 <PriorityIcon priority={p} className="h-3 w-3" inheritColor />
                 {t(($) => $.priority[p])}
               </span>
               {issue.priority === p && (
-                <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
+                <span className="ml-auto text-caption text-muted-foreground">{"✓"}</span>
               )}
             </P.Item>
           ))}
         </P.SubContent>
       </P.Sub>
 
-      {/* Assignee */}
+      {/* Assignee — closes this menu and hands off to the shared
+          AssigneePicker (members + agents + squads, with search and
+          permission checks). Keeps a single source of truth for the
+          assignee UX across detail sidebar, board cards, and right-click /
+          3-dot menus. */}
+      <P.Item onClick={onOpenAssignee}>
+        <UserMinus className="h-3.5 w-3.5" />
+        {t(($) => $.actions.assignee)}
+      </P.Item>
+
+      {/* Start date */}
       <P.Sub>
         <P.SubTrigger>
-          <UserMinus className="h-3.5 w-3.5" />
-          {t(($) => $.actions.assignee)}
+          <CalendarClock className="h-3.5 w-3.5" />
+          {t(($) => $.actions.start_date)}
         </P.SubTrigger>
         <P.SubContent>
-          <P.Item
-            onClick={() =>
-              updateField({ assignee_type: null, assignee_id: null })
-            }
-          >
-            <UserMinus className="h-3.5 w-3.5 text-muted-foreground" />
-            {t(($) => $.actions.unassigned)}
-            {!issue.assignee_type && (
-              <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
-            )}
+          <P.Item onClick={() => updateField({ start_date: todayDateOnly() })}>
+            {t(($) => $.actions.start_today)}
           </P.Item>
-          {members.map((m) => (
-            <P.Item
-              key={m.user_id}
-              onClick={() =>
-                updateField({ assignee_type: "member", assignee_id: m.user_id })
-              }
-            >
-              <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
-              {m.name}
-              {issue.assignee_type === "member" &&
-                issue.assignee_id === m.user_id && (
-                  <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
-                )}
-            </P.Item>
-          ))}
-          {agents.map((a) => (
-            <P.Item
-              key={a.id}
-              onClick={() =>
-                updateField({ assignee_type: "agent", assignee_id: a.id })
-              }
-            >
-              <ActorAvatar actorType="agent" actorId={a.id} size={16} />
-              {a.name}
-              {issue.assignee_type === "agent" && issue.assignee_id === a.id && (
-                <span className="ml-auto text-xs text-muted-foreground">{"✓"}</span>
-              )}
-            </P.Item>
-          ))}
+          <P.Item onClick={() => updateField({ start_date: addDaysDateOnly(1) })}>
+            {t(($) => $.actions.start_tomorrow)}
+          </P.Item>
+          <P.Item onClick={() => updateField({ start_date: addDaysDateOnly(7) })}>
+            {t(($) => $.actions.start_next_week)}
+          </P.Item>
+          {issue.start_date && (
+            <>
+              <P.Separator />
+              <P.Item onClick={() => updateField({ start_date: null })}>
+                {t(($) => $.actions.start_clear)}
+              </P.Item>
+            </>
+          )}
         </P.SubContent>
       </P.Sub>
 
@@ -241,13 +274,13 @@ export function IssueActionsMenuItems({
           {t(($) => $.actions.due_date)}
         </P.SubTrigger>
         <P.SubContent>
-          <P.Item onClick={() => updateField({ due_date: now().toISOString() })}>
+          <P.Item onClick={() => updateField({ due_date: todayDateOnly() })}>
             {t(($) => $.actions.due_today)}
           </P.Item>
-          <P.Item onClick={() => updateField({ due_date: inDays(1) })}>
+          <P.Item onClick={() => updateField({ due_date: addDaysDateOnly(1) })}>
             {t(($) => $.actions.due_tomorrow)}
           </P.Item>
-          <P.Item onClick={() => updateField({ due_date: inDays(7) })}>
+          <P.Item onClick={() => updateField({ due_date: addDaysDateOnly(7) })}>
             {t(($) => $.actions.due_next_week)}
           </P.Item>
           {issue.due_date && (
@@ -263,6 +296,13 @@ export function IssueActionsMenuItems({
 
       <P.Separator />
 
+      {/* Leads the "do something with this issue itself" group: the only
+          discoverable way to open an issue elsewhere for users who don't know
+          modifier-click, so it sits above the copy actions. */}
+      <P.Item onClick={openInNewTab}>
+        <ExternalLink className="h-3.5 w-3.5" />
+        {t(($) => $.actions.open_in_new_tab)}
+      </P.Item>
       <P.Item onClick={togglePin}>
         {isPinned ? (
           <PinOff className="h-3.5 w-3.5" />
@@ -277,17 +317,21 @@ export function IssueActionsMenuItems({
       </P.Item>
       <P.Item onClick={handleCopyWorkdirPath}>
         <FolderOpen className="h-3.5 w-3.5" />
-        {t(($) => $.actions.copy_workdir_path)}
+        {workdirCopyTarget?.source === "durable_project_directory"
+          ? t(($) => $.actions.copy_project_directory_path)
+          : t(($) => $.actions.copy_workdir_path)}
       </P.Item>
 
       <P.Separator />
 
-      {/* Relationship actions live under "More" — they're lower-frequency and
-          will grow (blocks, duplicates, related) as we add more relation types. */}
+      {/* Relationship actions live under "Relations" — a semantically explicit
+          label (unlike the old "More") so the first level tells you what the
+          submenu does. Holds parent/sub-issue links today, and will grow
+          (blocks, duplicates, related) as we add more relation types. */}
       <P.Sub>
         <P.SubTrigger>
-          <MoreHorizontal className="h-3.5 w-3.5" />
-          {t(($) => $.actions.more)}
+          <Network className="h-3.5 w-3.5" />
+          {t(($) => $.actions.relations)}
         </P.SubTrigger>
         <P.SubContent>
           <P.Item onClick={openCreateSubIssue}>
@@ -298,6 +342,12 @@ export function IssueActionsMenuItems({
             <ArrowUp className="h-3.5 w-3.5" />
             {t(($) => $.actions.set_parent_issue)}
           </P.Item>
+          {issue.parent_issue_id && (
+            <P.Item onClick={removeParent}>
+              <Unlink className="h-3.5 w-3.5" />
+              {t(($) => $.actions.remove_parent_issue)}
+            </P.Item>
+          )}
           <P.Item onClick={openAddChild}>
             <ArrowDown className="h-3.5 w-3.5" />
             {t(($) => $.actions.add_sub_issue)}
@@ -305,27 +355,25 @@ export function IssueActionsMenuItems({
         </P.SubContent>
       </P.Sub>
 
+      {/* Manual plugin hooks. Rendered by the host rather than by the plugin
+          because the trigger decides identity: a `manual` call acts as the
+          person who picked it, so the entry has to live where the host can
+          prove somebody did. Renders nothing when no plugin declares one. */}
+      <PluginHookMenuItems issueId={issue.id} Item={P.Item} Separator={P.Separator} />
+      {/* Modal surfaces open from here for the same reason: a modal is a third
+          party's UI taking over the screen, so it opens because a person chose
+          it, never on the plugin's own initiative. */}
+      <PluginModalMenuItems issueId={issue.id} Item={P.Item} />
+
       <P.Separator />
 
       <P.Item
         variant="destructive"
-        onClick={() => openDeleteConfirm({ onDeletedNavigateTo })}
+        onClick={() => openDeleteConfirm({ onDeletedFallbackPath })}
       >
         <Trash2 className="h-3.5 w-3.5" />
         {t(($) => $.actions.delete_issue)}
       </P.Item>
     </>
   );
-}
-
-function pickLatestWorkDir(tasks: AgentTask[] | undefined): string | undefined {
-  if (!tasks?.length) return undefined;
-  let latest: AgentTask | undefined;
-  for (const task of tasks) {
-    if (!task.work_dir) continue;
-    if (!latest || task.created_at > latest.created_at) {
-      latest = task;
-    }
-  }
-  return latest?.work_dir;
 }

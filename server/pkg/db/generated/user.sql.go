@@ -14,7 +14,7 @@ import (
 const createUser = `-- name: CreateUser :one
 INSERT INTO "user" (name, email, avatar_url)
 VALUES ($1, $2, $3)
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 type CreateUserParams struct {
@@ -33,18 +33,21 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone FROM "user"
 WHERE id = $1
 `
 
@@ -58,18 +61,21 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone FROM "user"
 WHERE email = $1
 `
 
@@ -83,14 +89,122 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
+}
+
+const getUserCredentialsByEmail = `-- name: GetUserCredentialsByEmail :one
+SELECT id, password_hash FROM "user"
+WHERE email = $1
+`
+
+type GetUserCredentialsByEmailRow struct {
+	ID           pgtype.UUID `json:"id"`
+	PasswordHash pgtype.Text `json:"password_hash"`
+}
+
+func (q *Queries) GetUserCredentialsByEmail(ctx context.Context, email string) (GetUserCredentialsByEmailRow, error) {
+	row := q.db.QueryRow(ctx, getUserCredentialsByEmail, email)
+	var i GetUserCredentialsByEmailRow
+	err := row.Scan(&i.ID, &i.PasswordHash)
+	return i, err
+}
+
+const getUsersByIDs = `-- name: GetUsersByIDs :many
+SELECT id, name, email, avatar_url FROM "user"
+WHERE id = ANY($1::uuid[])
+`
+
+type GetUsersByIDsRow struct {
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	Email     string      `json:"email"`
+	AvatarUrl pgtype.Text `json:"avatar_url"`
+}
+
+// Batch lookup from the GLOBAL user table (not gated on membership, so departed
+// members still render). Used to enrich attribution initiator / originator refs on
+// task responses without an N+1 (MUL-4302 §9). Returns only the display fields.
+func (q *Queries) GetUsersByIDs(ctx context.Context, ids []pgtype.UUID) ([]GetUsersByIDsRow, error) {
+	rows, err := q.db.Query(ctx, getUsersByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetUsersByIDsRow{}
+	for rows.Next() {
+		var i GetUsersByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.AvatarUrl,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const isDisplayNameTaken = `-- name: IsDisplayNameTaken :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim($1::text))
+) AS taken
+`
+
+func (q *Queries) IsDisplayNameTaken(ctx context.Context, checkName string) (bool, error) {
+	row := q.db.QueryRow(ctx, isDisplayNameTaken, checkName)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
+const isDisplayNameTakenByOther = `-- name: IsDisplayNameTakenByOther :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE lower(btrim(name)) = lower(btrim($1::text))
+    AND id <> $2
+) AS taken
+`
+
+type IsDisplayNameTakenByOtherParams struct {
+	CheckName string      `json:"check_name"`
+	ExcludeID pgtype.UUID `json:"exclude_id"`
+}
+
+func (q *Queries) IsDisplayNameTakenByOther(ctx context.Context, arg IsDisplayNameTakenByOtherParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isDisplayNameTakenByOther, arg.CheckName, arg.ExcludeID)
+	var taken bool
+	err := row.Scan(&taken)
+	return taken, err
+}
+
+const isUserPasswordConfigured = `-- name: IsUserPasswordConfigured :one
+SELECT EXISTS (
+  SELECT 1 FROM "user"
+  WHERE id = $1 AND password_hash IS NOT NULL AND btrim(password_hash) <> ''
+)
+`
+
+func (q *Queries) IsUserPasswordConfigured(ctx context.Context, id pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isUserPasswordConfigured, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const joinCloudWaitlist = `-- name: JoinCloudWaitlist :one
@@ -99,7 +213,7 @@ UPDATE "user" SET
     cloud_waitlist_reason = $3,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 type JoinCloudWaitlistParams struct {
@@ -121,12 +235,15 @@ func (q *Queries) JoinCloudWaitlist(ctx context.Context, arg JoinCloudWaitlistPa
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
 }
@@ -136,7 +253,7 @@ UPDATE "user" SET
     onboarded_at = COALESCE(onboarded_at, now()),
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 func (q *Queries) MarkUserOnboarded(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -149,12 +266,15 @@ func (q *Queries) MarkUserOnboarded(ctx context.Context, id pgtype.UUID) (User, 
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
 }
@@ -164,7 +284,7 @@ UPDATE "user" SET
     onboarding_questionnaire = COALESCE($1, onboarding_questionnaire),
     updated_at = now()
 WHERE id = $2
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 type PatchUserOnboardingParams struct {
@@ -172,6 +292,10 @@ type PatchUserOnboardingParams struct {
 	ID            pgtype.UUID `json:"id"`
 }
 
+// Partial update of the user's onboarding decision fields. Currently only the
+// questionnaire JSONB is patchable — the v2 attempt at persisting Step 3
+// runtime choice on the user row was reverted; that state now lives in a
+// frontend Zustand transient store.
 func (q *Queries) PatchUserOnboarding(ctx context.Context, arg PatchUserOnboardingParams) (User, error) {
 	row := q.db.QueryRow(ctx, patchUserOnboarding, arg.Questionnaire, arg.ID)
 	var i User
@@ -182,12 +306,15 @@ func (q *Queries) PatchUserOnboarding(ctx context.Context, arg PatchUserOnboardi
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
 }
@@ -197,7 +324,7 @@ UPDATE "user" SET
     starter_content_state = $2,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 type SetStarterContentStateParams struct {
@@ -220,70 +347,17 @@ func (q *Queries) SetStarterContentState(ctx context.Context, arg SetStarterCont
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
-}
-
-const updateUser = `-- name: UpdateUser :one
-UPDATE "user" SET
-    name = COALESCE($2, name),
-    avatar_url = COALESCE($3, avatar_url),
-    language = COALESCE($4, language),
-    updated_at = now()
-WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
-`
-
-type UpdateUserParams struct {
-	ID        pgtype.UUID `json:"id"`
-	Name      string      `json:"name"`
-	AvatarUrl pgtype.Text `json:"avatar_url"`
-	Language  pgtype.Text `json:"language"`
-}
-
-func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, updateUser,
-		arg.ID,
-		arg.Name,
-		arg.AvatarUrl,
-		arg.Language,
-	)
-	var i User
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Email,
-		&i.AvatarUrl,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.OnboardedAt,
-		&i.OnboardingQuestionnaire,
-		&i.CloudWaitlistEmail,
-		&i.CloudWaitlistReason,
-		&i.StarterContentState,
-		&i.Language,
-	)
-	return i, err
-}
-
-const isDisplayNameTaken = `-- name: IsDisplayNameTaken :one
-SELECT EXISTS (
-  SELECT 1 FROM "user"
-  WHERE lower(btrim(name)) = lower(btrim($1::text))
-) AS taken
-`
-
-func (q *Queries) IsDisplayNameTaken(ctx context.Context, checkName string) (bool, error) {
-	row := q.db.QueryRow(ctx, isDisplayNameTaken, checkName)
-	var taken bool
-	err := row.Scan(&taken)
-	return taken, err
 }
 
 const setUserPasswordHash = `-- name: SetUserPasswordHash :exec
@@ -300,39 +374,75 @@ func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHa
 	return err
 }
 
-const getUserCredentialsByEmail = `-- name: GetUserCredentialsByEmail :one
-SELECT id, password_hash FROM "user"
-WHERE email = $1
+const updateUser = `-- name: UpdateUser :one
+UPDATE "user" SET
+    name = COALESCE($2, name),
+    avatar_url = COALESCE($3, avatar_url),
+    language = COALESCE($4, language),
+    profile_description = COALESCE($5, profile_description),
+    timezone = CASE
+        WHEN $6::text IS NULL THEN timezone
+        WHEN $6::text = ''    THEN NULL
+        ELSE $6::text
+    END,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
-type GetUserCredentialsByEmailRow struct {
-	ID           pgtype.UUID `json:"id"`
-	PasswordHash pgtype.Text `json:"password_hash"`
+type UpdateUserParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	Name               string      `json:"name"`
+	AvatarUrl          pgtype.Text `json:"avatar_url"`
+	Language           pgtype.Text `json:"language"`
+	ProfileDescription pgtype.Text `json:"profile_description"`
+	Timezone           pgtype.Text `json:"timezone"`
 }
 
-func (q *Queries) GetUserCredentialsByEmail(ctx context.Context, email string) (GetUserCredentialsByEmailRow, error) {
-	row := q.db.QueryRow(ctx, getUserCredentialsByEmail, email)
-	var i GetUserCredentialsByEmailRow
-	err := row.Scan(&i.ID, &i.PasswordHash)
+// Patches the user-controlled profile fields. Each parameter follows
+// COALESCE-on-NULL semantics so the handler can omit any field it
+// doesn't intend to write.
+//
+// `timezone` (Viewing-tz preference) participates in
+// the same shape but uses sqlc.narg + a sentinel-string convention:
+// the handler passes the empty string "" to mean "clear back to NULL"
+// (browser-detected fallback), an IANA name like "Asia/Shanghai" to
+// pin a value, and `sqlc.narg('timezone') IS NULL` (no value at all)
+// to leave the existing column untouched. Folding it into UpdateUser
+// rather than carrying a dedicated UpdateUserTimezone keeps the
+// profile-patch shape uniform between Preferences fields.
+func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUser,
+		arg.ID,
+		arg.Name,
+		arg.AvatarUrl,
+		arg.Language,
+		arg.ProfileDescription,
+		arg.Timezone,
+	)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PasswordHash,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
+	)
 	return i, err
 }
 
-const isUserPasswordConfigured = `-- name: IsUserPasswordConfigured :one
-SELECT EXISTS (
-  SELECT 1 FROM "user"
-  WHERE id = $1 AND password_hash IS NOT NULL AND btrim(password_hash) <> ''
-)
-`
-
-func (q *Queries) IsUserPasswordConfigured(ctx context.Context, id pgtype.UUID) (bool, error) {
-	row := q.db.QueryRow(ctx, isUserPasswordConfigured, id)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const updateUserName = `-- name: UpdateUserName :one
-UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language
+UPDATE "user" SET name = $2, updated_at = now() WHERE id = $1 RETURNING id, name, email, avatar_url, created_at, updated_at, password_hash, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
 `
 
 type UpdateUserNameParams struct {
@@ -350,32 +460,15 @@ func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) 
 		&i.AvatarUrl,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PasswordHash,
 		&i.OnboardedAt,
 		&i.OnboardingQuestionnaire,
 		&i.CloudWaitlistEmail,
 		&i.CloudWaitlistReason,
 		&i.StarterContentState,
 		&i.Language,
+		&i.ProfileDescription,
+		&i.Timezone,
 	)
 	return i, err
-}
-
-const isDisplayNameTakenByOther = `-- name: IsDisplayNameTakenByOther :one
-SELECT EXISTS (
-  SELECT 1 FROM "user"
-  WHERE lower(btrim(name)) = lower(btrim($1::text))
-    AND id <> $2
-) AS taken
-`
-
-type IsDisplayNameTakenByOtherParams struct {
-	CheckName string      `json:"check_name"`
-	ExcludeID pgtype.UUID `json:"exclude_id"`
-}
-
-func (q *Queries) IsDisplayNameTakenByOther(ctx context.Context, arg IsDisplayNameTakenByOtherParams) (bool, error) {
-	row := q.db.QueryRow(ctx, isDisplayNameTakenByOther, arg.CheckName, arg.ExcludeID)
-	var taken bool
-	err := row.Scan(&taken)
-	return taken, err
 }

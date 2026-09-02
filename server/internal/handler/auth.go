@@ -15,12 +15,14 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/userdisplay"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -46,23 +48,34 @@ const devVerificationCodeEnv = "MULTICA_DEV_VERIFICATION_CODE"
 var supportedLanguages = map[string]struct{}{
 	"en":      {},
 	"zh-Hans": {},
+	"ko":      {},
+	"ja":      {},
 }
 
 type UserResponse struct {
-	ID                      string          `json:"id"`
-	Name                    string          `json:"name"`
-	Email                   string          `json:"email"`
-	AvatarURL               *string         `json:"avatar_url"`
-	Language                *string         `json:"language"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Email     string  `json:"email"`
+	AvatarURL *string `json:"avatar_url"`
+	Language  *string `json:"language"`
+	// Pinned IANA tz; nil = no preference (use browser-detected tz).
+	Timezone                *string         `json:"timezone"`
 	OnboardedAt             *string         `json:"onboarded_at"`
 	OnboardingQuestionnaire json.RawMessage `json:"onboarding_questionnaire"`
 	StarterContentState     *string         `json:"starter_content_state"`
+	ProfileDescription      string          `json:"profile_description"`
 	CreatedAt               string          `json:"created_at"`
 	UpdatedAt               string          `json:"updated_at"`
 	HasPassword             bool            `json:"has_password"`
 }
 
-func userToResponse(u db.User) UserResponse {
+// MaxProfileDescriptionLen caps the user-supplied profile_description body.
+// Picked at 2000 chars per MUL-2406: enough room for role / stack / a few
+// preferences, short enough that injecting it into every agent brief
+// doesn't move the needle on prompt cost.
+const MaxProfileDescriptionLen = 2000
+
+func (h *Handler) userToResponse(u db.User) UserResponse {
 	// JSONB column is []byte with DEFAULT '{}', so it's never nil at the DB
 	// level. Defensive coalesce just in case a future ALTER makes the column
 	// nullable and some row comes back with no default applied.
@@ -74,11 +87,13 @@ func userToResponse(u db.User) UserResponse {
 		ID:                      uuidToString(u.ID),
 		Name:                    u.Name,
 		Email:                   u.Email,
-		AvatarURL:               textToPtr(u.AvatarUrl),
+		AvatarURL:               h.resolveAvatarURLPtr(textToPtr(u.AvatarUrl)),
 		Language:                textToPtr(u.Language),
+		Timezone:                textToPtr(u.Timezone),
 		OnboardedAt:             timestampToPtr(u.OnboardedAt),
 		OnboardingQuestionnaire: json.RawMessage(q),
 		StarterContentState:     textToPtr(u.StarterContentState),
+		ProfileDescription:      u.ProfileDescription,
 		CreatedAt:               timestampToString(u.CreatedAt),
 		UpdatedAt:               timestampToString(u.UpdatedAt),
 	}
@@ -89,7 +104,7 @@ func (h *Handler) marshalUser(ctx context.Context, u db.User) (UserResponse, err
 	if err != nil {
 		return UserResponse{}, err
 	}
-	resp := userToResponse(u)
+	resp := h.userToResponse(u)
 	resp.HasPassword = hasPw
 	return resp, nil
 }
@@ -147,11 +162,14 @@ func isSixDigitCode(code string) bool {
 }
 
 func (h *Handler) issueJWT(user db.User) (string, error) {
+	if auth.IsTemporarilyDisabledUser(uuidToString(user.ID), user.Email) {
+		return "", auth.ErrTemporarilyDisabledUser
+	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":   uuidToString(user.ID),
 		"email": user.Email,
 		"name":  user.Name,
-		"exp":   time.Now().Add(30 * 24 * time.Hour).Unix(),
+		"exp":   time.Now().Add(auth.AuthTokenTTL()).Unix(),
 		"iat":   time.Now().Unix(),
 	})
 	return token.SignedString(auth.JWTSecret())
@@ -162,10 +180,17 @@ func (h *Handler) issueJWT(user db.User) (string, error) {
 // event fires on that edge, covering both the verification-code and Google
 // OAuth entry points.
 func (h *Handler) findOrCreateUser(ctx context.Context, email string) (user db.User, isNew bool, err error) {
+	if auth.IsTemporarilyDisabledUserEmail(email) {
+		return db.User{}, false, auth.ErrTemporarilyDisabledUser
+	}
+
 	user, err = h.Queries.GetUserByEmail(ctx, email)
 	isNew = isNotFound(err)
 	if err != nil && !isNew {
 		return db.User{}, false, err
+	}
+	if !isNew && auth.IsTemporarilyDisabledUser(uuidToString(user.ID), user.Email) {
+		return db.User{}, false, auth.ErrTemporarilyDisabledUser
 	}
 
 	if err := h.checkSignupAllowed(email, isNew); err != nil {
@@ -274,9 +299,13 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "email is required")
 		return
 	}
+	if auth.IsTemporarilyDisabledUserEmail(email) {
+		writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+		return
+	}
 
 	// Check signup restrictions before sending magic link
-	_, err := h.Queries.GetUserByEmail(r.Context(), email)
+	existingUser, err := h.Queries.GetUserByEmail(r.Context(), email)
 	if err != nil {
 		if !isNotFound(err) {
 			// Real database/query error → return 500
@@ -296,6 +325,10 @@ func (h *Handler) SendCode(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// User already exists → always allowed to login
+		if auth.IsTemporarilyDisabledUser(uuidToString(existingUser.ID), existingUser.Email) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		isNewUser := false
 		if err := h.checkSignupAllowed(email, isNewUser); err != nil {
 			// This should rarely happen, but handle it anyway
@@ -358,6 +391,10 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "email and code are required")
 		return
 	}
+	if auth.IsTemporarilyDisabledUserEmail(email) {
+		writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+		return
+	}
 
 	dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
 	if err != nil {
@@ -379,6 +416,10 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	user, isNew, err := h.findOrCreateUser(r.Context(), email)
 	if err != nil {
+		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		var signupErr SignupError
 		if errors.As(err, &signupErr) {
 			writeError(w, http.StatusForbidden, signupErr.Error())
@@ -388,11 +429,15 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if isNew {
-		h.Analytics.Capture(analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r)))
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r)))
 	}
 
 	tokenString, err := h.issueJWT(user)
 	if err != nil {
+		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		slog.Warn("login failed", append(logger.RequestAttrs(r), "error", err, "email", req.Email)...)
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -405,7 +450,7 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 
 	// Set CloudFront signed cookies for CDN access.
 	if h.CFSigner != nil {
-		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(30 * 24 * time.Hour)) {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(auth.AuthTokenTTL())) {
 			http.SetCookie(w, cookie)
 		}
 	}
@@ -444,9 +489,12 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateMeRequest struct {
-	Name      *string `json:"name"`
-	AvatarURL *string `json:"avatar_url"`
-	Language  *string `json:"language"`
+	Name               *string `json:"name"`
+	AvatarURL          *string `json:"avatar_url"`
+	Language           *string `json:"language"`
+	ProfileDescription *string `json:"profile_description"`
+	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
+	Timezone *string `json:"timezone"`
 }
 
 type GoogleLoginRequest struct {
@@ -552,9 +600,17 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	email := strings.ToLower(strings.TrimSpace(gUser.Email))
+	if auth.IsTemporarilyDisabledUserEmail(email) {
+		writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+		return
+	}
 
 	user, isNew, err := h.findOrCreateUser(r.Context(), email)
 	if err != nil {
+		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		var signupErr SignupError
 		if errors.As(err, &signupErr) {
 			writeError(w, http.StatusForbidden, signupErr.Error())
@@ -566,7 +622,7 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	if isNew {
 		evt := analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r))
 		evt.Properties["auth_method"] = "google"
-		h.Analytics.Capture(evt)
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, evt)
 	}
 
 	// Update name and avatar from Google profile if the user was just created
@@ -597,6 +653,10 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, err := h.issueJWT(user)
 	if err != nil {
+		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		slog.Warn("google login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -641,6 +701,10 @@ func (h *Handler) IssueCliToken(w http.ResponseWriter, r *http.Request) {
 
 	tokenString, err := h.issueJWT(user)
 	if err != nil {
+		if errors.Is(err, auth.ErrTemporarilyDisabledUser) {
+			writeError(w, http.StatusForbidden, auth.TemporarilyDisabledUserError)
+			return
+		}
 		slog.Warn("cli-token: failed to issue JWT", append(logger.RequestAttrs(r), "error", err, "user_id", userID)...)
 		writeError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -783,7 +847,11 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		Name: name,
 	}
 	if req.AvatarURL != nil {
-		params.AvatarUrl = pgtype.Text{String: strings.TrimSpace(*req.AvatarURL), Valid: true}
+		avatarURL, ok := h.acceptAvatarURL(w, r, *req.AvatarURL, currentUser.AvatarUrl.String)
+		if !ok {
+			return
+		}
+		params.AvatarUrl = pgtype.Text{String: avatarURL, Valid: true}
 	}
 	if req.Language != nil {
 		lang := strings.TrimSpace(*req.Language)
@@ -792,6 +860,31 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.Language = pgtype.Text{String: lang, Valid: true}
+	}
+	if req.ProfileDescription != nil {
+		// Count runes, not bytes: 2000 chars of Chinese must not be rejected
+		// as ~6000 bytes. utf8.RuneCountInString handles invalid UTF-8 by
+		// counting each bad byte as one rune, which still bounds the column.
+		desc := strings.TrimSpace(*req.ProfileDescription)
+		if utf8.RuneCountInString(desc) > MaxProfileDescriptionLen {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("profile_description exceeds %d characters", MaxProfileDescriptionLen))
+			return
+		}
+		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
+	}
+
+	if req.Timezone != nil {
+		// Valid=false → column untouched; Valid=true + "" → clear to
+		// NULL; Valid=true + IANA → set. Three-way semantics enforced
+		// in the UpdateUser SQL CASE.
+		tz := strings.TrimSpace(*req.Timezone)
+		if tz != "" {
+			if loc, err := time.LoadLocation(tz); err != nil || loc == nil {
+				writeError(w, http.StatusBadRequest, "invalid timezone")
+				return
+			}
+		}
+		params.Timezone = pgtype.Text{String: tz, Valid: true}
 	}
 
 	updatedUser, err := h.Queries.UpdateUser(r.Context(), params)

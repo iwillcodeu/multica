@@ -5,10 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "next dev --port 4000",
-    "build": "fumadocs-mdx && next build",
+    "build": "next build",
     "start": "next start",
-    "typecheck": "fumadocs-mdx && tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "mdx": "fumadocs-mdx",
     "postinstall": "fumadocs-mdx"
   },
   "dependencies": {
@@ -18,7 +19,7 @@
     "fumadocs-ui": "^15.5.2",
     "lucide-react": "catalog:",
     "mermaid": "^11.14.0",
-    "next": "^15.3.3",
+    "next": "^15.5.16",
     "next-themes": "^0.4.6",
     "react": "catalog:",
     "react-dom": "catalog:"

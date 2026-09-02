@@ -31,11 +31,13 @@ import (
 // finding about the "request disappears under Redis hiccups" path.
 
 const (
+	runtimePendingRedisHashTag = "{runtime_pending}"
+
 	// Namespaced so we don't collide with the realtime relay's ws:* keys.
-	localSkillListKeyPrefix       = "mul:local_skill:list:"
-	localSkillListPendingPrefix   = "mul:local_skill:list:pending:"
-	localSkillImportKeyPrefix     = "mul:local_skill:import:"
-	localSkillImportPendingPrefix = "mul:local_skill:import:pending:"
+	localSkillListKeyPrefix       = "mul:" + runtimePendingRedisHashTag + ":local_skill:list:"
+	localSkillListPendingPrefix   = "mul:" + runtimePendingRedisHashTag + ":local_skill:list:pending:"
+	localSkillImportKeyPrefix     = "mul:" + runtimePendingRedisHashTag + ":local_skill:import:"
+	localSkillImportPendingPrefix = "mul:" + runtimePendingRedisHashTag + ":local_skill:import:pending:"
 	localSkillRedisPopMaxRetries  = 5
 )
 
@@ -92,17 +94,24 @@ func (s *RedisLocalSkillListStore) Create(ctx context.Context, runtimeID string)
 		return nil, fmt.Errorf("marshal list request: %w", err)
 	}
 
-	pipe := s.rdb.TxPipeline()
-	pipe.Set(ctx, localSkillListKey(req.ID), data, runtimeLocalSkillStoreRetention)
-	pipe.ZAdd(ctx, localSkillListPendingKey(runtimeID), redis.Z{
+	requestKey := localSkillListKey(req.ID)
+	pendingKey := localSkillListPendingKey(runtimeID)
+	// Creation does not require a Redis transaction: the request is not
+	// observable by dispatchers until it is added to the pending set. A plain
+	// pipeline also works on managed Redis deployments that deny MULTI.
+	pipe := s.rdb.Pipeline()
+	pipe.Set(ctx, requestKey, data, runtimeLocalSkillStoreRetention)
+	pipe.ZAdd(ctx, pendingKey, redis.Z{
 		Score:  float64(now.UnixNano()),
 		Member: req.ID,
 	})
 	// Keep the pending ZSET alive a bit longer than the individual request
 	// so stale members still in the zset can be swept lazily on PopPending
 	// without blocking the create path on deletion.
-	pipe.Expire(ctx, localSkillListPendingKey(runtimeID), runtimeLocalSkillStoreRetention*2)
+	pipe.Expire(ctx, pendingKey, runtimeLocalSkillStoreRetention*2)
 	if _, err := pipe.Exec(ctx); err != nil {
+		_ = s.rdb.Del(ctx, requestKey).Err()
+		_ = s.rdb.ZRem(ctx, pendingKey, req.ID).Err()
 		return nil, fmt.Errorf("persist list request: %w", err)
 	}
 	return req, nil
@@ -221,7 +230,7 @@ func (s *RedisLocalSkillListStore) PopPending(ctx context.Context, runtimeID str
 	return nil, nil
 }
 
-func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skills []RuntimeLocalSkillSummary, supported bool) error {
+func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skills []RuntimeLocalSkillSummary, supported bool, mcpServers []RuntimeLocalMcpServerSummary, mcpSupported bool) error {
 	req, err := s.loadListRequest(ctx, id)
 	if err != nil {
 		return err
@@ -232,6 +241,8 @@ func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skil
 	req.Status = RuntimeLocalSkillCompleted
 	req.Skills = skills
 	req.Supported = supported
+	req.McpServers = mcpServers
+	req.McpSupported = mcpSupported
 	req.UpdatedAt = time.Now()
 	return s.persistListRequest(ctx, req)
 }
@@ -262,32 +273,41 @@ func NewRedisLocalSkillImportStore(rdb *redis.Client) *RedisLocalSkillImportStor
 	return &RedisLocalSkillImportStore{rdb: rdb}
 }
 
-func (s *RedisLocalSkillImportStore) Create(ctx context.Context, runtimeID, creatorID, skillKey string, name, description *string) (*RuntimeLocalSkillImportRequest, error) {
+func (s *RedisLocalSkillImportStore) Create(ctx context.Context, input LocalSkillImportRequestInput) (*RuntimeLocalSkillImportRequest, error) {
 	now := time.Now()
 	req := &RuntimeLocalSkillImportRequest{
-		ID:          randomID(),
-		RuntimeID:   runtimeID,
-		SkillKey:    skillKey,
-		Name:        name,
-		Description: description,
-		Status:      RuntimeLocalSkillPending,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-		CreatorID:   creatorID,
+		ID:               randomID(),
+		RuntimeID:        input.RuntimeID,
+		SkillKey:         input.SkillKey,
+		Name:             input.Name,
+		Description:      input.Description,
+		Action:           input.Action,
+		TargetSkillID:    input.TargetSkillID,
+		SupportsConflict: input.SupportsConflict,
+		Status:           RuntimeLocalSkillPending,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+		CreatorID:        input.CreatorID,
 	}
 	data, err := s.marshalImport(req)
 	if err != nil {
 		return nil, err
 	}
 
-	pipe := s.rdb.TxPipeline()
-	pipe.Set(ctx, localSkillImportKey(req.ID), data, runtimeLocalSkillStoreRetention)
-	pipe.ZAdd(ctx, localSkillImportPendingKey(runtimeID), redis.Z{
+	requestKey := localSkillImportKey(req.ID)
+	pendingKey := localSkillImportPendingKey(input.RuntimeID)
+	// Match the other request stores: creation only needs ordered batching, and
+	// avoiding MULTI keeps this path compatible with restricted managed Redis.
+	pipe := s.rdb.Pipeline()
+	pipe.Set(ctx, requestKey, data, runtimeLocalSkillStoreRetention)
+	pipe.ZAdd(ctx, pendingKey, redis.Z{
 		Score:  float64(now.UnixNano()),
 		Member: req.ID,
 	})
-	pipe.Expire(ctx, localSkillImportPendingKey(runtimeID), runtimeLocalSkillStoreRetention*2)
+	pipe.Expire(ctx, pendingKey, runtimeLocalSkillStoreRetention*2)
 	if _, err := pipe.Exec(ctx); err != nil {
+		_ = s.rdb.Del(ctx, requestKey).Err()
+		_ = s.rdb.ZRem(ctx, pendingKey, req.ID).Err()
 		return nil, fmt.Errorf("persist import request: %w", err)
 	}
 	return req, nil
@@ -426,7 +446,61 @@ func (s *RedisLocalSkillImportStore) PopPending(ctx context.Context, runtimeID s
 	return nil, nil
 }
 
-func (s *RedisLocalSkillImportStore) Complete(ctx context.Context, id string, skill SkillResponse) error {
+func (s *RedisLocalSkillImportStore) PopPendingBatch(ctx context.Context, runtimeID string, limit int) ([]*RuntimeLocalSkillImportRequest, error) {
+	pendingKey := localSkillImportPendingKey(runtimeID)
+
+	// Fetch up to limit candidate IDs from the sorted set.
+	ids, err := s.rdb.ZRange(ctx, pendingKey, 0, int64(limit)-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("zrange pending batch: %w", err)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	// Try to claim each candidate individually using the existing atomic
+	// Lua script. This is safe under multi-node contention: each ZREM is
+	// atomic, so two nodes never claim the same request.
+	var result []*RuntimeLocalSkillImportRequest
+	for _, id := range ids {
+		req, err := s.loadImportRequest(ctx, id)
+		if err != nil {
+			return result, err
+		}
+		if req == nil {
+			s.rdb.ZRem(ctx, pendingKey, id)
+			continue
+		}
+		if req.Status != RuntimeLocalSkillPending {
+			s.rdb.ZRem(ctx, pendingKey, id)
+			continue
+		}
+
+		now := time.Now()
+		req.Status = RuntimeLocalSkillRunning
+		req.RunStartedAt = &now
+		req.UpdatedAt = now
+		data, err := s.marshalImport(req)
+		if err != nil {
+			return result, err
+		}
+
+		claimed, err := claimPendingScript.Run(
+			ctx, s.rdb,
+			[]string{pendingKey, localSkillImportKey(id)},
+			id, data, int(runtimeLocalSkillStoreRetention.Seconds()),
+		).Int64()
+		if err != nil {
+			return result, fmt.Errorf("claim pending batch: %w", err)
+		}
+		if claimed == 1 {
+			result = append(result, req)
+		}
+	}
+	return result, nil
+}
+
+func (s *RedisLocalSkillImportStore) Complete(ctx context.Context, id string, skill SkillWithFilesResponse) error {
 	req, err := s.loadImportRequest(ctx, id)
 	if err != nil {
 		return err
@@ -436,6 +510,21 @@ func (s *RedisLocalSkillImportStore) Complete(ctx context.Context, id string, sk
 	}
 	req.Status = RuntimeLocalSkillCompleted
 	req.Skill = &skill
+	req.UpdatedAt = time.Now()
+	return s.persistImportRequest(ctx, req)
+}
+
+func (s *RedisLocalSkillImportStore) Conflict(ctx context.Context, id string, info LocalSkillImportConflict) error {
+	req, err := s.loadImportRequest(ctx, id)
+	if err != nil {
+		return err
+	}
+	if req == nil {
+		return nil
+	}
+	req.Status = RuntimeLocalSkillConflict
+	conflict := info
+	req.Conflict = &conflict
 	req.UpdatedAt = time.Now()
 	return s.persistImportRequest(ctx, req)
 }

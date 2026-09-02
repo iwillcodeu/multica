@@ -3,6 +3,14 @@ SELECT * FROM project_resource
 WHERE project_id = $1
 ORDER BY position ASC, created_at ASC;
 
+-- name: ListProjectResourcesInWorkspace :many
+-- Workspace-scoped read for the daemon claim path. project_resource carries its
+-- own workspace_id, so a corrupt project reference cannot pull another tenant's
+-- repository URLs or local paths into a claim response.
+SELECT * FROM project_resource
+WHERE project_id = $1 AND workspace_id = $2
+ORDER BY position ASC, created_at ASC;
+
 -- name: ListProjectResourcesForProjects :many
 SELECT * FROM project_resource
 WHERE project_id = ANY(sqlc.arg('project_ids')::uuid[])
@@ -22,6 +30,14 @@ INSERT INTO project_resource (
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7
 ) RETURNING *;
+
+-- name: UpdateProjectResource :one
+UPDATE project_resource
+SET resource_ref = $2,
+    label        = $3,
+    position     = $4
+WHERE id = $1
+RETURNING *;
 
 -- name: DeleteProjectResource :exec
 DELETE FROM project_resource WHERE id = $1;
