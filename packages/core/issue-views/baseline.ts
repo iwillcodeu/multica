@@ -1,7 +1,7 @@
 import type { ActorFilterValue, FilterSnapshot } from "../issues/stores/view-store";
-import type { IssuePriority, IssueStatus, PropertyFilterValue } from "../types";
+import type { IssuePriority, IssueStatus, IssueCategory, PropertyFilterValue } from "../types";
 import { isKnownPropertyFilterOp, isPropertyOperatorFilter, propertyFilterValueKey } from "../types";
-import { PRIORITY_DISPLAY_ORDER } from "../issues/config";
+import { ISSUE_CATEGORIES, PRIORITY_DISPLAY_ORDER } from "../issues/config";
 
 /**
  * The open saved view's query, normalized for two jobs:
@@ -15,6 +15,7 @@ import { PRIORITY_DISPLAY_ORDER } from "../issues/config";
 export interface IssueViewBaseline {
   status: Set<string>;
   priority: Set<string>;
+  category: Set<string>;
   /** Actor keys as `${type}:${id}`. */
   assignee: Set<string>;
   includeNoAssignee: boolean;
@@ -75,6 +76,9 @@ export function baselineFromQuery(query: Record<string, unknown>): IssueViewBase
   const priorityFilters = stringArray(query.priorityFilters).filter(
     (p): p is IssuePriority => (PRIORITY_DISPLAY_ORDER as readonly string[]).includes(p),
   );
+  const categoryFilters = stringArray(query.categoryFilters).filter(
+    (c): c is IssueCategory => (ISSUE_CATEGORIES as readonly string[]).includes(c),
+  );
   const assigneeFilters = actorArray(query.assigneeFilters);
   const creatorFilters = actorArray(query.creatorFilters);
   const projectFilters = stringArray(query.projectFilters);
@@ -99,6 +103,7 @@ export function baselineFromQuery(query: Record<string, unknown>): IssueViewBase
   return {
     status: new Set(statusFilters),
     priority: new Set(priorityFilters),
+    category: new Set(categoryFilters),
     assignee: new Set(assigneeFilters.map(actorFilterKey)),
     includeNoAssignee,
     creator: new Set(creatorFilters.map(actorFilterKey)),
@@ -109,6 +114,7 @@ export function baselineFromQuery(query: Record<string, unknown>): IssueViewBase
     raw: {
       statusFilters,
       priorityFilters,
+      categoryFilters,
       assigneeFilters,
       includeNoAssignee,
       creatorFilters,

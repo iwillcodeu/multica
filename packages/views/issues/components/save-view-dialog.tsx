@@ -586,6 +586,7 @@ export function SaveViewDialog({
       query: {
         statusFilters: state.statusFilters,
         priorityFilters: state.priorityFilters,
+        categoryFilters: state.categoryFilters,
         assigneeFilters: state.assigneeFilters,
         includeNoAssignee: state.includeNoAssignee,
         creatorFilters: state.creatorFilters,

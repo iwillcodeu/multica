@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/dbid"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -103,13 +105,18 @@ func (h *Handler) CreateIssueAsUserCore(ctx context.Context, req CreateIssueAsUs
 		priority = "none"
 	}
 
-	var dueDate pgtype.Timestamptz
+	var dueDate pgtype.Date
 	if req.DueDate != nil && strings.TrimSpace(*req.DueDate) != "" {
-		t, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.DueDate))
+		raw := strings.TrimSpace(*req.DueDate)
+		d, err := util.ParseCalendarDate(raw)
 		if err != nil {
-			return db.Issue{}, errInvalidArg("invalid due_date format, expected RFC3339")
+			t, rfcErr := time.Parse(time.RFC3339, raw)
+			if rfcErr != nil {
+				return db.Issue{}, errInvalidArg("invalid due_date format, expected YYYY-MM-DD")
+			}
+			d = pgtype.Date{Time: t, Valid: true, InfinityModifier: pgtype.Finite}
 		}
-		dueDate = pgtype.Timestamptz{Time: t, Valid: true}
+		dueDate = d
 	}
 
 	tx, err := h.TxStarter.Begin(ctx)
@@ -126,6 +133,7 @@ func (h *Handler) CreateIssueAsUserCore(ctx context.Context, req CreateIssueAsUs
 	}
 
 	issue, err := qtx.CreateIssue(ctx, db.CreateIssueParams{
+		ID:           dbid.NewV7(),
 		WorkspaceID:  parseUUID(workspaceID),
 		ProjectID:    projectUUID,
 		Title:        strings.TrimSpace(req.Title),

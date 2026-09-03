@@ -462,6 +462,8 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
           return { statusFilters: [] };
         case "priority":
           return { priorityFilters: [] };
+        case "category":
+          return { categoryFilters: [] };
         case "assignee":
           return { assigneeFilters: [], includeNoAssignee: false };
         case "creator":

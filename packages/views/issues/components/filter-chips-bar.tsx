@@ -259,6 +259,7 @@ function useFilterChips(
     const current: FilterSnapshot = {
       statusFilters: s.statusFilters,
       priorityFilters: s.priorityFilters,
+      categoryFilters: s.categoryFilters,
       assigneeFilters: s.assigneeFilters,
       includeNoAssignee: s.includeNoAssignee,
       creatorFilters: s.creatorFilters,
@@ -273,6 +274,9 @@ function useFilterChips(
         break;
       case "priority":
         s.resetFiltersTo({ ...current, priorityFilters: raw.priorityFilters });
+        break;
+      case "category":
+        s.resetFiltersTo({ ...current, categoryFilters: raw.categoryFilters });
         break;
       case "assignee":
         s.resetFiltersTo({

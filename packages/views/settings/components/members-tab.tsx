@@ -376,6 +376,7 @@ export function MembersTab() {
   const { data: invitations = [] } = useQuery(invitationListOptions(wsId));
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [invitePassword, setInvitePassword] = useState("");
   const [inviteRole, setInviteRole] = useState<MemberRole>("member");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteSeatPurchase, setInviteSeatPurchase] =
@@ -414,15 +415,29 @@ export function MembersTab() {
   const { data: shareLinks = [] } = useQuery(shareLinkListOptions(wsId, canManageWorkspace));
 
   const sendInvitation = useCallback(
-    async (email: string, role: MemberRole) => {
+    async (email: string, role: MemberRole, password?: string) => {
       if (!workspace) return;
-      await api.createMember(workspace.id, { email, role });
+      const payload: { email: string; role: MemberRole; password?: string } = {
+        email,
+        role,
+      };
+      const trimmedPassword = password?.trim();
+      if (trimmedPassword) {
+        payload.password = trimmedPassword;
+      }
+      await api.createMember(workspace.id, payload);
       setInviteEmail("");
+      setInvitePassword("");
       setInviteRole("member");
-      await qc.invalidateQueries({
-        queryKey: workspaceKeys.invitations(wsId),
-      });
-      toast.success(t(($) => $.members.toast_invitation_sent));
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: workspaceKeys.invitations(wsId) }),
+        qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) }),
+      ]);
+      toast.success(
+        trimmedPassword
+          ? t(($) => $.members.toast_account_created)
+          : t(($) => $.members.toast_invitation_sent),
+      );
     },
     [qc, t, workspace, wsId],
   );
@@ -431,9 +446,14 @@ export function MembersTab() {
     if (!workspace) return;
     const email = inviteEmail.trim();
     const role = inviteRole;
+    const password = invitePassword.trim();
+    if (password && password.length < 8) {
+      toast.error(t(($) => $.members.password_too_short));
+      return;
+    }
     setInviteLoading(true);
     try {
-      await sendInvitation(email, role);
+      await sendInvitation(email, role, password || undefined);
     } catch (e) {
       const code = errorCode(e);
       const capacityFailure = seatInvitationCapacityFailure(code);
@@ -795,7 +815,7 @@ export function MembersTab() {
                 <Plus className="h-4 w-4 text-muted-foreground" />
                 <h3 className="text-body font-medium">{t(($) => $.members.invite_title)}</h3>
               </div>
-              <div className="grid gap-3 sm:grid-cols-[1fr_120px_auto]">
+              <div className="grid gap-3 sm:grid-cols-[1fr_1fr_120px_auto]">
                 <Input
                   type="email"
                   name="invite-email"
@@ -805,6 +825,18 @@ export function MembersTab() {
                   value={inviteEmail}
                   onChange={(e) => setInviteEmail(e.target.value)}
                   placeholder={t(($) => $.members.invite_email_placeholder)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && inviteEmail.trim()) handleInviteMember();
+                  }}
+                />
+                <Input
+                  type="password"
+                  name="invite-password"
+                  autoComplete="new-password"
+                  aria-label={t(($) => $.members.invite_password_placeholder)}
+                  value={invitePassword}
+                  onChange={(e) => setInvitePassword(e.target.value)}
+                  placeholder={t(($) => $.members.invite_password_placeholder)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && inviteEmail.trim()) handleInviteMember();
                   }}
@@ -829,9 +861,18 @@ export function MembersTab() {
                   onClick={handleInviteMember}
                   disabled={inviteLoading || !inviteEmail.trim()}
                 >
-                  {inviteLoading ? t(($) => $.members.inviting) : t(($) => $.members.invite_button)}
+                  {inviteLoading
+                    ? invitePassword.trim()
+                      ? t(($) => $.members.creating_account)
+                      : t(($) => $.members.inviting)
+                    : invitePassword.trim()
+                      ? t(($) => $.members.create_account_button)
+                      : t(($) => $.members.invite_button)}
                 </Button>
               </div>
+              <p className="text-caption text-muted-foreground">
+                {t(($) => $.members.invite_password_hint)}
+              </p>
             </CardContent>
           </Card>
         )}

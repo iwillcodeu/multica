@@ -697,6 +697,108 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, h.memberWithUserResponse(member, user))
 }
 
+// provisionMemberWithPassword creates (or reuses) a user with the given email,
+// sets an initial password, adds them to the workspace, and marks them
+// onboarded so they can log in immediately without email delivery.
+func (h *Handler) provisionMemberWithPassword(w http.ResponseWriter, r *http.Request, requester db.Member, email, role, password string) {
+	if err := auth.ValidatePasswordSetting(password); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	existingUser, err := h.Queries.GetUserByEmail(r.Context(), email)
+	if err == nil {
+		_, memberErr := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+			UserID:      existingUser.ID,
+			WorkspaceID: requester.WorkspaceID,
+		})
+		if memberErr == nil {
+			writeError(w, http.StatusConflict, "user is already a member")
+			return
+		}
+	} else if !isNotFound(err) {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	// A live email invite is redundant once we provision the account directly.
+	if pending, perr := h.Queries.GetPendingInvitationByEmail(r.Context(), db.GetPendingInvitationByEmailParams{
+		WorkspaceID:  requester.WorkspaceID,
+		InviteeEmail: email,
+	}); perr == nil {
+		if _, rerr := h.Queries.RevokeInvitation(r.Context(), pending.ID); rerr != nil {
+			slog.Warn("revoke pending invitation before provision failed", append(logger.RequestAttrs(r), "error", rerr, "invitation_id", uuidToString(pending.ID))...)
+		}
+	}
+
+	user := existingUser
+	if isNotFound(err) {
+		provisionName, perr := h.pickProvisionDisplayName(r.Context(), email)
+		if perr != nil {
+			slog.Warn("provision display name failed", append(logger.RequestAttrs(r), "error", perr)...)
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+		user, err = h.Queries.CreateUser(r.Context(), db.CreateUserParams{
+			Name:  provisionName,
+			Email: email,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+	}
+
+	hashed, herr := auth.HashPassword(password)
+	if herr != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set password")
+		return
+	}
+	if err := h.Queries.SetUserPasswordHash(r.Context(), db.SetUserPasswordHashParams{
+		ID:           user.ID,
+		PasswordHash: pgtype.Text{String: hashed, Valid: true},
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set password")
+		return
+	}
+
+	member, err := h.Queries.CreateMember(r.Context(), db.CreateMemberParams{
+		WorkspaceID: requester.WorkspaceID,
+		UserID:      user.ID,
+		Role:        role,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "user is already a member")
+			return
+		}
+		slog.Warn("provision member failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to create member")
+		return
+	}
+
+	if _, err := h.Queries.MarkUserOnboarded(r.Context(), user.ID); err != nil {
+		slog.Warn("provision member: mark onboarded failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
+		return
+	}
+	user, err = h.Queries.GetUser(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	workspaceID := uuidToString(requester.WorkspaceID)
+	slog.Info("member provisioned with password", append(logger.RequestAttrs(r), "member_id", uuidToString(member.ID), "workspace_id", workspaceID, "email", email, "role", role)...)
+	userID := requestUserID(r)
+	eventPayload := map[string]any{"member": h.memberWithUserResponse(member, user)}
+	if ws, err := h.Queries.GetWorkspace(r.Context(), requester.WorkspaceID); err == nil {
+		eventPayload["workspace_name"] = ws.Name
+	}
+	h.publish(protocol.EventMemberAdded, workspaceID, "member", userID, eventPayload)
+
+	writeJSON(w, http.StatusCreated, h.memberWithUserResponse(member, user))
+}
 
 type UpdateMemberRequest struct {
 	Role     *string `json:"role"`
