@@ -517,10 +517,13 @@ function useFilterChips(
     });
   }
   if (showDateChip && dateFilter) {
-    const fieldLabel =
+    const fieldLabelKey =
       dateFilter.field === "created_at"
-        ? t(($) => $.filters.date_field_created)
-        : t(($) => $.filters.date_field_updated);
+        ? "date_field_created"
+        : dateFilter.field === "updated_at"
+          ? "date_field_updated"
+          : "date_field_both";
+    const fieldLabel = t(($) => $.filters[fieldLabelKey]);
     const short = (dateOnly: string) => {
       const [, m, d] = dateOnly.split("-");
       return `${Number(m)}/${Number(d)}`;
@@ -602,18 +605,15 @@ export function FilterChipList({ trailing }: { trailing?: ReactNode }) {
 /**
  * Horizontal strip of active-filter chips shown under the issues header row.
  * Renders nothing when no filter is active. Each chip clears exactly its own
- * dimension; the right-aligned Clear resets everything (including the date
- * filter, which lives outside the view store).
+ * dimension; the right-aligned Clear resets everything, including the date
+ * filter (in the view store, but not persisted — relative presets such as
+ * Today would otherwise go stale after a calendar-day rollover).
  */
 export function FilterChipsBar({
-  dateFilter = null,
-  onDateFilterChange,
   onSave,
   saveLabel,
   viewBaseline,
 }: {
-  dateFilter?: IssueDateFilter | null;
-  onDateFilterChange?: (filter: IssueDateFilter | null) => void;
   /** Shows the save/edit button. Hosts that support saved views pass this
    *  to open their dialog; surfaces without support omit it. */
   onSave?: () => void;
@@ -623,7 +623,13 @@ export function FilterChipsBar({
   viewBaseline?: IssueViewBaseline;
 }) {
   const { t } = useT("issues");
-  const { chips, hasAny, clearAll } = useFilterChips(dateFilter, onDateFilterChange, viewBaseline);
+  const dateFilter = useViewStore((s) => s.dateFilter);
+  const setDateFilter = useViewStore((s) => s.setDateFilter);
+  const { chips, hasAny, clearAll } = useFilterChips(
+    dateFilter,
+    setDateFilter,
+    viewBaseline,
+  );
 
   if (!hasAny) return null;
 

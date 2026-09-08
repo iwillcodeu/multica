@@ -816,6 +816,83 @@ describe("IssueSurface — filtered empty state", () => {
   });
 });
 
+// My Issues project tabs used to post-filter `controller.issues`. Table mode
+// never materializes that window (EMPTY_ISSUES), so a clientFilter made every
+// project tab look empty — including issues assigned to the current user.
+describe("IssueSurface — table clientFilter empty", () => {
+  let qc: QueryClient;
+
+  beforeEach(() => {
+    mockWsId.current = "ws-1";
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    pruneIssueSurfaceViewStates([]);
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+  });
+
+  afterEach(() => {
+    cleanup();
+    qc.clear();
+    pruneIssueSurfaceViewStates([]);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("still renders the table when a clientFilter is set", async () => {
+    const store = getIssueSurfaceViewStore("my:user-1:assigned");
+    store.getState().setViewMode("table");
+    const mine = makeIssue("mine", "Assigned to me", "p1");
+    const listIssueTableRows = vi.fn(() =>
+      Promise.resolve({
+        query_fingerprint: "sha256:my-table",
+        group_key: null,
+        parent_id: null,
+        total: 1,
+        rows: [{ issue: mine, direct_child_count: 0 }],
+        branch_total: 1,
+        next_cursor: null,
+      }),
+    );
+    setApiInstance({
+      listIssueStatuses: async () => ({ statuses: [], categories: [], total: 0 }),
+      listIssues: vi.fn(() => never<ListIssuesResponse>()),
+      listIssueTableRows,
+      listIssueTableFacets: vi.fn(() => never()),
+      listGroupedIssues: vi.fn(() => never()),
+      listProjects: vi.fn(() => never()),
+      getAgentTaskSnapshot: vi.fn(() => never<AgentTask[]>()),
+      getWorkspaceWorkingAgents: vi.fn(() => Promise.resolve([])),
+      getChildIssueProgress: vi.fn(() => Promise.resolve([])),
+      listProperties: vi.fn(() => Promise.resolve({ properties: [] })),
+      listMembers: vi.fn(() => Promise.resolve([])),
+      listAgents: vi.fn(() => Promise.resolve([])),
+      listSquads: vi.fn(() => Promise.resolve([])),
+    } as unknown as ApiClient);
+
+    render(
+      <QueryClientProvider client={qc}>
+        <IssueSurface
+          scope={{ type: "my", relation: "assigned", userId: "user-1" }}
+          modes={["table"]}
+          clientFilter={(issue) => issue.project_id === "p1"}
+          renderEmpty={() => <div data-testid="client-empty">empty</div>}
+          renderHeader={() => null}
+          batchToolbar="never"
+        />
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText("Assigned to me");
+    expect(screen.queryByTestId("client-empty")).toBeNull();
+  });
+});
+
 /**
  * The status catalog is server state, so it can fail. A CUSTOM status filter
  * cannot be routed to a column without it, so row fetching is suspended — which

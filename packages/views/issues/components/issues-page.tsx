@@ -8,7 +8,6 @@ import type {
   WorkingAgentSummary,
 } from "@multica/core/types";
 import { useIssuesScope } from "@multica/core/issues/stores/issues-scope-store";
-import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { PageHeader } from "../../layout/page-header";
 import { useT } from "../../i18n";
 import { IssueSurface } from "../surface/issue-surface";
@@ -29,15 +28,10 @@ function IssuesSurfaceHeader({
   tableFacetCounts?: IssueTableFacetsResponse;
   onTableFacetChange: (facet: IssueTableFacetSpec | null) => void;
 }) {
-  const dateFilter = useViewStore((s) => s.dateFilter);
-  const setDateFilter = useViewStore((s) => s.setDateFilter);
-
   return (
     <IssuesHeader
       scopedIssues={issues}
       workingAgents={workingAgents}
-      dateFilter={dateFilter}
-      onDateFilterChange={setDateFilter}
       isRefreshing={isRefreshing}
       facetCountsExact={facetCountsExact}
       tableFacetCounts={tableFacetCounts}

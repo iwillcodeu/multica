@@ -223,6 +223,7 @@ function IssueSurfaceContent({
   );
   const shouldShowClientEmpty =
     !!clientFilter &&
+    controller.viewMode !== "table" &&
     issues.length === 0 &&
     (showClientEmpty ? showClientEmpty(renderContext) : true);
   const shouldShowBatchToolbar =

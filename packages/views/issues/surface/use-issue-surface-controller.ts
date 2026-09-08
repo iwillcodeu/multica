@@ -210,7 +210,10 @@ export function useIssueSurfaceController({
     [scope],
   );
   const scopeKey = queryPlan.scopeKey;
-  const projectId = scope.type === "project" ? scope.projectId : undefined;
+  const projectId =
+    scope.type === "project" || scope.type === "my"
+      ? scope.projectId
+      : undefined;
 
   const viewMode = useViewStore((s) => s.viewMode);
   const setViewMode = useViewStore((s) => s.setViewMode);
@@ -385,10 +388,10 @@ export function useIssueSurfaceController({
 
   const projectFilterState = useMemo(
     () => ({
-      projectFilters: scope.type === "project" ? [] : projectFilters,
-      includeNoProject: scope.type === "project" ? false : includeNoProject,
+      projectFilters: projectId ? [] : projectFilters,
+      includeNoProject: projectId ? false : includeNoProject,
     }),
-    [includeNoProject, projectFilters, scope.type],
+    [includeNoProject, projectFilters, projectId],
   );
   const { projectFilters: viewProjectFilters, includeNoProject: viewIncludeNoProject } =
     projectFilterState;
@@ -480,9 +483,11 @@ export function useIssueSurfaceController({
         ...(assigneeFilters.length > 0 ? { assignees: assigneeFilters } : {}),
         ...(includeNoAssignee ? { include_no_assignee: true } : {}),
         ...(creatorFilters.length > 0 ? { creators: creatorFilters } : {}),
-        ...(viewProjectFilters.length > 0
-          ? { project_ids: viewProjectFilters }
-          : {}),
+        ...(scope.type === "my" && projectId
+          ? { project_ids: [projectId] }
+          : viewProjectFilters.length > 0
+            ? { project_ids: viewProjectFilters }
+            : {}),
         ...(viewIncludeNoProject ? { include_no_project: true } : {}),
         ...(labelFilters.length > 0 ? { label_ids: labelFilters } : {}),
         ...(Object.keys(effectivePropertyFilters).length > 0
@@ -510,6 +515,7 @@ export function useIssueSurfaceController({
     includeNoAssignee,
     labelFilters,
     priorityFilters,
+    projectId,
     scope,
     showSubIssues,
     sort.sort_by,

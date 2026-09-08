@@ -20,6 +20,9 @@ SET project_id = p.id
 FROM project p
 WHERE p.workspace_id = i.workspace_id;
 
+-- Historical: this branch originally required every issue to belong to a
+-- project. Application create/update (and mainline 034) treat project as
+-- optional; 449_issue_project_id_nullable drops the NOT NULL that follows.
 ALTER TABLE issue ALTER COLUMN project_id SET NOT NULL;
 
 CREATE INDEX idx_issue_project ON issue(project_id);

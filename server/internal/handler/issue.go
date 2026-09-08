@@ -1598,9 +1598,33 @@ type issueActorFilter struct {
 }
 
 type issueDateFilter struct {
-	column string
-	start  time.Time
-	end    time.Time
+	columns []string
+	start   time.Time
+	end     time.Time
+}
+
+func issueDateColumns(field string) ([]string, bool) {
+	switch field {
+	case "created_at":
+		return []string{"created_at"}, true
+	case "updated_at":
+		return []string{"updated_at"}, true
+	case "both":
+		return []string{"created_at", "updated_at"}, true
+	default:
+		return nil, false
+	}
+}
+
+func issueDateRangePredicate(columns []string, startRef, endRef string) string {
+	parts := make([]string, 0, len(columns))
+	for _, column := range columns {
+		parts = append(parts, fmt.Sprintf("(i.%s >= %s AND i.%s < %s)", column, startRef, column, endRef))
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, " OR ") + ")"
 }
 
 func parseIssueDateFilter(w http.ResponseWriter, values url.Values) (*issueDateFilter, bool) {
@@ -1615,13 +1639,8 @@ func parseIssueDateFilter(w http.ResponseWriter, values url.Values) (*issueDateF
 		return nil, false
 	}
 
-	column := ""
-	switch field {
-	case "created_at":
-		column = "created_at"
-	case "updated_at":
-		column = "updated_at"
-	default:
+	columns, ok := issueDateColumns(field)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid date_field")
 		return nil, false
 	}
@@ -1641,22 +1660,14 @@ func parseIssueDateFilter(w http.ResponseWriter, values url.Values) (*issueDateF
 		return nil, false
 	}
 
-	return &issueDateFilter{column: column, start: start, end: end}, true
+	return &issueDateFilter{columns: columns, start: start, end: end}, true
 }
 
 func appendIssueDateFilter(where []string, addArg func(any) string, filter *issueDateFilter) []string {
 	if filter == nil {
 		return where
 	}
-	startRef := addArg(filter.start)
-	endRef := addArg(filter.end)
-	return append(where, fmt.Sprintf(
-		"i.%s >= %s AND i.%s < %s",
-		filter.column,
-		startRef,
-		filter.column,
-		endRef,
-	))
+	return append(where, issueDateRangePredicate(filter.columns, addArg(filter.start), addArg(filter.end)))
 }
 
 // appendIssueTableSearchFilter adds a quick identity search to the ordinary

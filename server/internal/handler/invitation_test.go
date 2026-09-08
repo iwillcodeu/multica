@@ -776,3 +776,51 @@ func TestCreateInvitation_RouteRequiresAdminRole(t *testing.T) {
 		t.Errorf("owner status = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestCreateInvitation_ProvisionWithPasswordRequiresName(t *testing.T) {
+	clearInvitationsForTestWorkspace(t)
+	password := "password123"
+	req := newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/members", CreateMemberRequest{
+		Email:    "provision-noname@multica.ai",
+		Role:     "member",
+		Password: &password,
+	})
+	req = withURLParam(req, "id", testWorkspaceID)
+	rec := httptest.NewRecorder()
+	testHandler.CreateInvitation(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "name is required") {
+		t.Fatalf("body = %s, want name is required", rec.Body.String())
+	}
+}
+
+func TestCreateInvitation_ProvisionWithPasswordUsesName(t *testing.T) {
+	clearInvitationsForTestWorkspace(t)
+	email := "provision-named@multica.ai"
+	password := "password123"
+	displayName := "Provision Named"
+	req := newRequest(http.MethodPost, "/api/workspaces/"+testWorkspaceID+"/members", CreateMemberRequest{
+		Email:    email,
+		Role:     "member",
+		Password: &password,
+		Name:     &displayName,
+	})
+	req = withURLParam(req, "id", testWorkspaceID)
+	rec := httptest.NewRecorder()
+	testHandler.CreateInvitation(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201: %s", rec.Code, rec.Body.String())
+	}
+	var member MemberWithUserResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &member); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if member.Name != displayName {
+		t.Fatalf("name = %q, want %q", member.Name, displayName)
+	}
+	if member.Email != email {
+		t.Fatalf("email = %q, want %q", member.Email, email)
+	}
+}

@@ -8,6 +8,9 @@ export type IssueScope =
       type: "my";
       relation: "all" | "assigned" | "created" | "involved";
       userId: string;
+      /** Pins My Issues to one project tab. Membership is still the
+       *  my-relation; the server query AND this project_id. */
+      projectId?: string;
     }
   | { type: "project"; projectId: string; actorKind?: WorkspaceIssueActorKind }
   | {
@@ -65,7 +68,9 @@ export function issueScopeKey(scope: IssueScope): string {
     case "workspace":
       return `workspace:${scope.actorKind ?? "all"}`;
     case "my":
-      return `my:${scope.userId}:${scope.relation}`;
+      return scope.projectId
+        ? `my:${scope.userId}:${scope.relation}:${scope.projectId}`
+        : `my:${scope.userId}:${scope.relation}`;
     case "project":
       // The unrestricted tab keeps the historical key so existing persisted
       // display state survives; Members/Agents get their own key (and thus

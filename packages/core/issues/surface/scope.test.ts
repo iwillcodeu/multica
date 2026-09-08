@@ -17,6 +17,14 @@ describe("issue surface scope", () => {
     expect(
       issueScopeKey({ type: "my", relation: "assigned", userId: "u1" }),
     ).toBe("my:u1:assigned");
+    expect(
+      issueScopeKey({
+        type: "my",
+        relation: "assigned",
+        userId: "u1",
+        projectId: "p1",
+      }),
+    ).toBe("my:u1:assigned:p1");
     expect(issueScopeKey({ type: "project", projectId: "p1" })).toBe(
       "project:p1",
     );
@@ -65,6 +73,22 @@ describe("issue surface scope", () => {
       scopeKey: "my:u1:assigned",
       queryFilter: { assignee_id: "u1" },
       createDefaults: { assignee_type: "member", assignee_id: "u1" },
+    });
+    expect(
+      buildIssueSurfaceQueryPlan({
+        type: "my",
+        relation: "assigned",
+        userId: "u1",
+        projectId: "p1",
+      }),
+    ).toEqual({
+      scopeKey: "my:u1:assigned:p1",
+      queryFilter: { assignee_id: "u1", project_id: "p1" },
+      createDefaults: {
+        assignee_type: "member",
+        assignee_id: "u1",
+        project_id: "p1",
+      },
     });
     expect(
       buildIssueSurfaceQueryPlan({

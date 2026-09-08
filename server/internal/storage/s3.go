@@ -31,12 +31,21 @@ type S3Storage struct {
 // NewS3StorageFromEnv creates an S3Storage from environment variables.
 // Returns nil if S3_BUCKET is not set.
 //
+// MERGE CAUTION (projects vs main): mainline Multica talks to AWS S3 with
+// AWS_ENDPOINT_URL unset and a real AWS region. This projects branch deploys
+// to Aliyun OSS (S3_REGION=oss-cn-*, S3_ENDPOINT / AWS_ENDPOINT_URL pointing
+// at *.aliyuncs.com, S3_USE_PATH_STYLE=false, credentials via
+// MULTICA_CREDENTIALS_INI). When merging main, keep the S3_ENDPOINT alias and
+// do not drop OSS-only env handling — an empty endpoint with an oss-* region
+// makes the SDK PutObject to <bucket>.s3.oss-*.amazonaws.com (NXDOMAIN).
+//
 // Environment variables:
 //   - S3_BUCKET (required)
 //   - S3_REGION (default: us-west-2; for Aliyun OSS use the OSS region id, e.g. oss-cn-hangzhou)
 //   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (optional; highest priority when both set, else default credential chain)
 //   - AWS_ENDPOINT_URL (optional S3-compatible endpoint; Aliyun OSS example: https://oss-cn-hangzhou.aliyuncs.com)
-//   - S3_USE_PATH_STYLE (optional; defaults to true when AWS_ENDPOINT_URL is set; Aliyun OSS typically wants false)
+//   - S3_ENDPOINT (optional alias for AWS_ENDPOINT_URL; used when the AWS name is unset)
+//   - S3_USE_PATH_STYLE (optional; defaults to true when an endpoint is set; Aliyun OSS typically wants false)
 //   - MULTICA_CREDENTIALS_INI (optional) — path to an INI file with [credentials] and
 //     alibaba_cloud_access_key_id / alibaba_cloud_access_key_secret (used when env keys are not both set)
 func NewS3StorageFromEnv() *S3Storage {
@@ -88,7 +97,7 @@ func NewS3StorageFromEnv() *S3Storage {
 	}
 
 	cdnDomain := os.Getenv("CLOUDFRONT_DOMAIN")
-	endpointURL := strings.TrimSpace(os.Getenv("AWS_ENDPOINT_URL"))
+	endpointURL := s3EndpointURLFromEnv()
 	usePathStyle := s3UsePathStyleFromEnv(endpointURL)
 	s3Opts := []func(*s3.Options){}
 	if endpointURL != "" || usePathStyle {
@@ -122,6 +131,18 @@ func (s *S3Storage) CdnDomain() string {
 // "<bucket>.s3.<region>.amazonaws.com" into S3_BUCKET.
 func looksLikeS3Hostname(bucket string) bool {
 	return strings.Contains(bucket, "amazonaws.com")
+}
+
+// s3EndpointURLFromEnv prefers the AWS SDK name, then S3_ENDPOINT.
+//
+// projects-branch only as an alias: production OSS env historically set
+// S3_ENDPOINT, while main only documents AWS_ENDPOINT_URL. Keep both when
+// merging — see the MERGE CAUTION on NewS3StorageFromEnv.
+func s3EndpointURLFromEnv() string {
+	if v := strings.TrimSpace(os.Getenv("AWS_ENDPOINT_URL")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
 }
 
 func s3UsePathStyleFromEnv(endpointURL string) bool {

@@ -679,6 +679,33 @@ func TestCreateIssueRejectsCrossWorkspaceProject(t *testing.T) {
 	}
 }
 
+// TestCreateIssueAllowsOmittingProject pins workspace Issues create without a
+// project. Branch-local 031_project made project_id NOT NULL; application
+// create (and mainline 034) treat project as optional — regression for the
+// SQLSTATE 23502 failure on /:slug/issues create.
+func TestCreateIssueAllowsOmittingProject(t *testing.T) {
+	var issueID string
+	defer func() {
+		if issueID == "" {
+			return
+		}
+		req := newRequest("DELETE", "/api/issues/"+issueID, nil)
+		req = withURLParam(req, "id", issueID)
+		testHandler.DeleteIssue(httptest.NewRecorder(), req)
+	}()
+
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title": "Workspace issue without project",
+	})
+	w := testutil.Call(t, testHandler.CreateIssue, req).Want(http.StatusCreated)
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+	issueID = created.ID
+	if created.ProjectID != nil {
+		t.Fatalf("CreateIssue without project_id: got project_id %v, want nil", created.ProjectID)
+	}
+}
+
 func TestCreateSubIssueInheritsParentProject(t *testing.T) {
 	var projectID, parentID, childID string
 	defer func() {

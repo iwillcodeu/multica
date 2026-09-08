@@ -530,6 +530,50 @@ func TestNewS3StorageFromEnv_ConfiguresEndpointPathStyle(t *testing.T) {
 	})
 }
 
+func TestNewS3StorageFromEnv_ReadsS3EndpointAlias(t *testing.T) {
+	t.Run("uses S3_ENDPOINT when AWS_ENDPOINT_URL is unset", func(t *testing.T) {
+		t.Setenv("S3_BUCKET", "artink-pmo")
+		t.Setenv("S3_REGION", "oss-cn-shanghai")
+		t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
+		t.Setenv("AWS_ENDPOINT_URL", "")
+		t.Setenv("S3_ENDPOINT", "https://oss-cn-shanghai-internal.aliyuncs.com")
+		t.Setenv("S3_USE_PATH_STYLE", "false")
+
+		store := NewS3StorageFromEnv()
+		if store == nil {
+			t.Fatal("NewS3StorageFromEnv() = nil")
+		}
+		if got, want := store.endpointURL, "https://oss-cn-shanghai-internal.aliyuncs.com"; got != want {
+			t.Fatalf("endpointURL = %q, want %q", got, want)
+		}
+		if store.usePathStyle {
+			t.Fatalf("usePathStyle = true, want false")
+		}
+		if store.usesAWSEndpoint() {
+			t.Fatal("usesAWSEndpoint() = true, want false for Aliyun OSS")
+		}
+	})
+
+	t.Run("AWS_ENDPOINT_URL wins over S3_ENDPOINT", func(t *testing.T) {
+		t.Setenv("S3_BUCKET", "test-bucket")
+		t.Setenv("S3_REGION", "us-east-1")
+		t.Setenv("AWS_ACCESS_KEY_ID", "AKID")
+		t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRET")
+		t.Setenv("AWS_ENDPOINT_URL", "https://objects.example.com")
+		t.Setenv("S3_ENDPOINT", "https://oss-cn-shanghai-internal.aliyuncs.com")
+		t.Setenv("S3_USE_PATH_STYLE", "")
+
+		store := NewS3StorageFromEnv()
+		if store == nil {
+			t.Fatal("NewS3StorageFromEnv() = nil")
+		}
+		if got, want := store.endpointURL, "https://objects.example.com"; got != want {
+			t.Fatalf("endpointURL = %q, want %q", got, want)
+		}
+	})
+}
+
 func TestS3StorageUploadedURL(t *testing.T) {
 	const key = "uploads/abc/file.png"
 

@@ -38,7 +38,7 @@ export type SortField =
   | "title"
   | `property:${string}`;
 export type SortDirection = "asc" | "desc";
-export type IssueDateField = "created_at" | "updated_at";
+export type IssueDateField = "created_at" | "updated_at" | "both";
 
 export type TableSystemColumnKey =
   | "title"

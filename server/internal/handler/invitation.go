@@ -89,10 +89,14 @@ func (h *Handler) CreateInvitation(w http.ResponseWriter, r *http.Request) {
 	if req.Password != nil {
 		password = strings.TrimSpace(*req.Password)
 	}
+	displayName := ""
+	if req.Name != nil {
+		displayName = strings.TrimSpace(*req.Name)
+	}
 	// Self-host / offline mail: when an initial password is supplied, create the
 	// account and membership immediately instead of sending an email invite.
 	if password != "" {
-		h.provisionMemberWithPassword(w, r, requester, email, role, password)
+		h.provisionMemberWithPassword(w, r, requester, email, role, password, displayName)
 		return
 	}
 

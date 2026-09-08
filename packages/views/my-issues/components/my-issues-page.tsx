@@ -1,14 +1,12 @@
 "use client";
 
-import { useCallback } from "react";
-import { useStore } from "zustand";
 import { ListTodo } from "lucide-react";
+import { useStore } from "zustand";
 import { useAuthStore } from "@multica/core/auth";
 import {
   myIssuesRelationFromScope,
   myIssuesViewStore,
 } from "@multica/core/issues/stores/my-issues-view-store";
-import type { Issue } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { IssueSurface } from "../../issues/surface/issue-surface";
 import { useT } from "../../i18n";
@@ -19,10 +17,6 @@ export function MyIssuesPage({ projectId }: { projectId?: string | null } = {}) 
   const user = useAuthStore((s) => s.user);
   const scope = useStore(myIssuesViewStore, (s) => s.scope);
   const setScope = useStore(myIssuesViewStore, (s) => s.setScope);
-  const clientFilter = useCallback(
-    (issue: Issue) => (projectId ? issue.project_id === projectId : true),
-    [projectId],
-  );
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
@@ -37,11 +31,11 @@ export function MyIssuesPage({ projectId }: { projectId?: string | null } = {}) 
             type: "my",
             userId: user.id,
             relation: myIssuesRelationFromScope(scope),
+            ...(projectId ? { projectId } : {}),
           }}
           modes={["board", "list", "table", "swimlane"]}
           batchToolbar="list"
           createDefaults={projectId ? { project_id: projectId } : undefined}
-          clientFilter={projectId ? clientFilter : undefined}
           renderHeader={({ controller }) => (
             <MyIssuesHeader
               allIssues={controller.surfaceIssues}

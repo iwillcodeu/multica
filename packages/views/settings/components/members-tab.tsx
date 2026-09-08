@@ -9,6 +9,7 @@ import {
   Loader2,
   Mail,
   MoreHorizontal,
+  Pencil,
   Plus,
   Shield,
   Trash2,
@@ -40,6 +41,13 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@multica/ui/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@multica/ui/components/ui/dialog";
 import {
   Select,
   SelectTrigger,
@@ -156,6 +164,7 @@ function MemberRow({
   isSelf,
   busy,
   onRoleChange,
+  onEditName,
   onRemove,
 }: {
   member: MemberWithUser;
@@ -167,6 +176,7 @@ function MemberRow({
   isSelf: boolean;
   busy: boolean;
   onRoleChange: (role: MemberRole) => void;
+  onEditName: () => void;
   onRemove: () => void;
 }) {
   const { t } = useT("settings");
@@ -176,7 +186,7 @@ function MemberRow({
   const canEditRole = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const canRemove = canManage && !isSelf && (member.role !== "owner" || canManageOwners);
   const isLastOwner = member.role === "owner" && ownerCount <= 1;
-  const showMenu = canEditRole || canRemove;
+  const showMenu = canManage || canEditRole || canRemove;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3">
@@ -195,6 +205,13 @@ function MemberRow({
             }
           />
           <DropdownMenuContent align="end" className="w-auto">
+            {canManage && (
+              <DropdownMenuItem onClick={onEditName}>
+                <Pencil className="h-3.5 w-3.5" />
+                {t(($) => $.members.edit_name_action)}
+              </DropdownMenuItem>
+            )}
+            {canManage && canEditRole && <DropdownMenuSeparator />}
             {canEditRole && (
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
@@ -376,6 +393,7 @@ export function MembersTab() {
   const { data: invitations = [] } = useQuery(invitationListOptions(wsId));
 
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
   const [invitePassword, setInvitePassword] = useState("");
   const [inviteRole, setInviteRole] = useState<MemberRole>("member");
   const [inviteLoading, setInviteLoading] = useState(false);
@@ -394,6 +412,9 @@ export function MembersTab() {
     variant?: "destructive";
     onConfirm: () => Promise<void>;
   } | null>(null);
+  const [nameEditMember, setNameEditMember] = useState<MemberWithUser | null>(null);
+  const [nameEditValue, setNameEditValue] = useState("");
+  const [nameEditLoading, setNameEditLoading] = useState(false);
   const previewSeatPurchase = usePreviewWorkspaceSeatPurchase();
   const purchaseSeats = usePurchaseWorkspaceSeats(wsId);
   const seatPurchaseSummary = useQuery({
@@ -415,18 +436,28 @@ export function MembersTab() {
   const { data: shareLinks = [] } = useQuery(shareLinkListOptions(wsId, canManageWorkspace));
 
   const sendInvitation = useCallback(
-    async (email: string, role: MemberRole, password?: string) => {
+    async (email: string, role: MemberRole, password?: string, name?: string) => {
       if (!workspace) return;
-      const payload: { email: string; role: MemberRole; password?: string } = {
+      const payload: {
+        email: string;
+        role: MemberRole;
+        password?: string;
+        name?: string;
+      } = {
         email,
         role,
       };
       const trimmedPassword = password?.trim();
+      const trimmedName = name?.trim();
       if (trimmedPassword) {
         payload.password = trimmedPassword;
       }
+      if (trimmedName) {
+        payload.name = trimmedName;
+      }
       await api.createMember(workspace.id, payload);
       setInviteEmail("");
+      setInviteName("");
       setInvitePassword("");
       setInviteRole("member");
       await Promise.all([
@@ -445,15 +476,20 @@ export function MembersTab() {
   const handleInviteMember = async () => {
     if (!workspace) return;
     const email = inviteEmail.trim();
+    const name = inviteName.trim();
     const role = inviteRole;
     const password = invitePassword.trim();
     if (password && password.length < 8) {
       toast.error(t(($) => $.members.password_too_short));
       return;
     }
+    if (password && !name) {
+      toast.error(t(($) => $.members.name_required));
+      return;
+    }
     setInviteLoading(true);
     try {
-      await sendInvitation(email, role, password || undefined);
+      await sendInvitation(email, role, password || undefined, name || undefined);
     } catch (e) {
       const code = errorCode(e);
       const capacityFailure = seatInvitationCapacityFailure(code);
@@ -729,6 +765,37 @@ export function MembersTab() {
     }
   };
 
+  const openNameEdit = (member: MemberWithUser) => {
+    setNameEditMember(member);
+    setNameEditValue(member.name);
+  };
+
+  const handleSaveMemberName = async () => {
+    if (!workspace || !nameEditMember) return;
+    const name = nameEditValue.trim();
+    if (!name) {
+      toast.error(t(($) => $.members.name_required));
+      return;
+    }
+    if (name === nameEditMember.name) {
+      setNameEditMember(null);
+      return;
+    }
+    setNameEditLoading(true);
+    setMemberActionId(nameEditMember.id);
+    try {
+      await api.updateMember(workspace.id, nameEditMember.id, { name });
+      qc.invalidateQueries({ queryKey: workspaceKeys.members(wsId) });
+      toast.success(t(($) => $.members.toast_name_updated));
+      setNameEditMember(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : t(($) => $.members.toast_name_failed));
+    } finally {
+      setNameEditLoading(false);
+      setMemberActionId(null);
+    }
+  };
+
   const handleRemoveMember = (member: MemberWithUser) => {
     if (!workspace) return;
     setConfirmAction({
@@ -815,7 +882,20 @@ export function MembersTab() {
                 <Plus className="h-4 w-4 text-muted-foreground" />
                 <h3 className="text-body font-medium">{t(($) => $.members.invite_title)}</h3>
               </div>
-              <div className="grid gap-3 sm:grid-cols-[1fr_1fr_120px_auto]">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_1fr_1fr_120px_auto]">
+                <Input
+                  type="text"
+                  name="invite-name"
+                  autoComplete="name"
+                  spellCheck={false}
+                  aria-label={t(($) => $.members.invite_name_placeholder)}
+                  value={inviteName}
+                  onChange={(e) => setInviteName(e.target.value)}
+                  placeholder={t(($) => $.members.invite_name_placeholder)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && inviteEmail.trim()) handleInviteMember();
+                  }}
+                />
                 <Input
                   type="email"
                   name="invite-email"
@@ -859,7 +939,11 @@ export function MembersTab() {
                 </Select>
                 <Button
                   onClick={handleInviteMember}
-                  disabled={inviteLoading || !inviteEmail.trim()}
+                  disabled={
+                    inviteLoading ||
+                    !inviteEmail.trim() ||
+                    (invitePassword.trim().length > 0 && !inviteName.trim())
+                  }
                 >
                   {inviteLoading
                     ? invitePassword.trim()
@@ -889,6 +973,7 @@ export function MembersTab() {
                   isSelf={m.user_id === user?.id}
                   busy={memberActionId === m.id}
                   onRoleChange={(role) => handleRoleChange(m.id, role)}
+                  onEditName={() => openNameEdit(m)}
                   onRemove={() => handleRemoveMember(m)}
                 />
               </div>
@@ -1110,6 +1195,46 @@ export function MembersTab() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={nameEditMember !== null}
+        onOpenChange={(open) => {
+          if (!open && !nameEditLoading) {
+            setNameEditMember(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t(($) => $.members.edit_name_title)}</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={nameEditValue}
+            onChange={(e) => setNameEditValue(e.target.value)}
+            aria-label={t(($) => $.members.invite_name_placeholder)}
+            autoComplete="name"
+            spellCheck={false}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleSaveMemberName();
+              }
+            }}
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setNameEditMember(null)}
+              disabled={nameEditLoading}
+            >
+              {t(($) => $.members.confirm_cancel)}
+            </Button>
+            <Button onClick={() => void handleSaveMemberName()} disabled={nameEditLoading}>
+              {nameEditLoading ? t(($) => $.members.saving_name) : t(($) => $.members.save_name)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={!!confirmAction} onOpenChange={(v) => { if (!v) setConfirmAction(null); }}>
         <AlertDialogContent>

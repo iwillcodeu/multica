@@ -190,10 +190,13 @@ function normalizeDateRange(from: Date, to: Date) {
   return from <= to ? [from, to] as const : [to, from] as const;
 }
 
-const DATE_FIELD_LABEL_KEY: Record<IssueDateField, "date_field_created" | "date_field_updated"> = {
+const DATE_FIELD_LABEL_KEY: Record<IssueDateField, "date_field_created" | "date_field_updated" | "date_field_both"> = {
   created_at: "date_field_created",
   updated_at: "date_field_updated",
+  both: "date_field_both",
 };
+const DATE_FIELD_OPTIONS: IssueDateField[] = ["both", "created_at", "updated_at"];
+const DEFAULT_DATE_FIELD: IssueDateField = "both";
 
 /** Feeding this to useIssueCounts hides every per-option badge (badges only
  *  render at count > 0) without touching the option lists themselves. */
@@ -1006,7 +1009,7 @@ function DateSubContent({
   onChange: (filter: IssueDateFilter | null) => void;
 }) {
   const { t } = useT("issues");
-  const [field, setField] = useState<IssueDateField>(value?.field ?? "created_at");
+  const [field, setField] = useState<IssueDateField>(value?.field ?? DEFAULT_DATE_FIELD);
   // Controlled so Apply can dismiss the calendar while the filter menu
   // itself stays open (menu-wide rule: filter edits never close the menu).
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -1046,10 +1049,11 @@ function DateSubContent({
       <DropdownMenuGroup>
         <DropdownMenuLabel>{t(($) => $.filters.date_field)}</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={field} onValueChange={(next) => setFieldValue(next as IssueDateField)}>
-          {(["created_at", "updated_at"] as const).map((option) => (
+          {DATE_FIELD_OPTIONS.map((option) => (
             // Picking the date field is a parameter for the presets below, not
             // the final action — keep the menu open so the user can continue
-            // to a preset or the custom range.
+            // to a preset or the custom range. Both is created-or-updated
+            // (union), exclusive with Created and Updated.
             <DropdownMenuRadioItem key={option} value={option} closeOnClick={false}>
               {t(($) => $.filters[DATE_FIELD_LABEL_KEY[option]])}
             </DropdownMenuRadioItem>
@@ -1153,8 +1157,6 @@ export function IssuesHeader({
   scopedIssues,
   workingAgents,
   allowGantt = false,
-  dateFilter = null,
-  onDateFilterChange,
   isRefreshing = false,
   facetCountsExact = true,
   tableFacetCounts,
@@ -1166,8 +1168,6 @@ export function IssuesHeader({
    *  behind the agents-working chip. */
   workingAgents: WorkingAgentSummary[] | undefined;
   allowGantt?: boolean;
-  dateFilter?: IssueDateFilter | null;
-  onDateFilterChange?: (filter: IssueDateFilter | null) => void;
   isRefreshing?: boolean;
   /** See IssueDisplayControls.facetCountsExact. */
   facetCountsExact?: boolean;
@@ -1344,8 +1344,6 @@ export function IssuesHeader({
           <IssueDisplayControls
             scopedIssues={scopedIssues}
             allowGantt={allowGantt}
-            dateFilter={dateFilter}
-            onDateFilterChange={onDateFilterChange}
             facetCountsExact={facetCountsExact}
             tableFacetCounts={tableFacetCounts}
             onTableFacetChange={onTableFacetChange}
@@ -1356,8 +1354,6 @@ export function IssuesHeader({
       </div>
     </div>
     <FilterChipsBar
-      dateFilter={dateFilter}
-      onDateFilterChange={onDateFilterChange}
       viewBaseline={viewBaseline}
       saveLabel={
         activeView
@@ -1396,7 +1392,9 @@ export function IssuesHeader({
  * The full filter menu (every dimension, search, counts) behind a caller-
  * supplied trigger. The toolbar wraps it in its labeled button; the
  * save-view dialog attaches it to a ghost "add filter" chip targeting the
- * draft store. Counts follow `scopedIssues` — pass nothing to hide them.
+ * draft store. Date is opt-in via `onDateFilterChange` so save-view can
+ * omit relative presets. Counts follow `scopedIssues` — pass nothing to
+ * hide them.
  */
 export function IssueFilterMenu({
   trigger,
@@ -1418,6 +1416,8 @@ export function IssueFilterMenu({
   tableFacetCounts?: IssueTableFacetsResponse;
   onTableFacetChange?: (facet: IssueTableFacetSpec | null) => void;
   dateFilter?: IssueDateFilter | null;
+  /** Live surfaces pass the view-store setter. Omit it in save-view: date
+   *  presets are relative and are not part of a saved view's query. */
   onDateFilterChange?: (filter: IssueDateFilter | null) => void;
   /** Mirrors the menu's open state. */
   onOpenChange?: (open: boolean) => void;
@@ -1858,8 +1858,6 @@ export function IssueDisplayControls({
   scopedIssues,
   hideViewToggle = false,
   allowGantt = false,
-  dateFilter = null,
-  onDateFilterChange,
   facetCountsExact = true,
   tableFacetCounts,
   onTableFacetChange,
@@ -1867,8 +1865,6 @@ export function IssueDisplayControls({
 }: {
   scopedIssues: Issue[];
   hideViewToggle?: boolean;
-  dateFilter?: IssueDateFilter | null;
-  onDateFilterChange?: (filter: IssueDateFilter | null) => void;
   /** Open saved view: menu marks the view's values checked-and-disabled;
    *  the trigger count only counts additions on top. */
   viewBaseline?: IssueViewBaseline;
@@ -1900,6 +1896,8 @@ export function IssueDisplayControls({
   const includeNoProject = useViewStore((s) => s.includeNoProject);
   const labelFilters = useViewStore((s) => s.labelFilters);
   const propertyFilters = useViewStore((s) => s.propertyFilters);
+  const dateFilter = useViewStore((s) => s.dateFilter);
+  const setDateFilter = useViewStore((s) => s.setDateFilter);
   const cardPropertyIds = useViewStore((s) => s.cardPropertyIds);
   const sortBy = useViewStore((s) => s.sortBy);
   const sortDirection = useViewStore((s) => s.sortDirection);
@@ -1939,8 +1937,6 @@ export function IssueDisplayControls({
     [workspaceProperties],
   );
 
-  const showDateFilter = !!onDateFilterChange;
-
   // Only count filters whose definition is still active — a filter pinned to
   // an archived definition is stripped by the surface controller and must
   // not light the badge for an effect that no longer exists.
@@ -1963,7 +1959,7 @@ export function IssueDisplayControls({
       projectFilters,
       includeNoProject,
       labelFilters,
-      dateFilter: showDateFilter ? dateFilter : null,
+      dateFilter,
     },
     viewBaseline,
   );
@@ -2057,8 +2053,8 @@ export function IssueDisplayControls({
           facetCountsExact={facetCountsExact}
           tableFacetCounts={tableFacetCounts}
           onTableFacetChange={onTableFacetChange}
-          dateFilter={showDateFilter ? dateFilter : null}
-          onDateFilterChange={onDateFilterChange}
+          dateFilter={dateFilter}
+          onDateFilterChange={setDateFilter}
           viewBaseline={viewBaseline}
         />
 

@@ -131,6 +131,7 @@
     "date_field": "필드",
     "date_field_created": "생성",
     "date_field_updated": "수정",
+    "date_field_both": "생성 또는 수정",
     "date_today": "오늘",
     "date_last_3_days": "최근 3일",
     "date_last_7_days": "최근 7일",

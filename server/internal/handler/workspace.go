@@ -532,6 +532,7 @@ type CreateMemberRequest struct {
 	Email    string  `json:"email"`
 	Role     string  `json:"role"`
 	Password *string `json:"password"`
+	Name     *string `json:"name"`
 }
 
 func (h *Handler) memberWithUserResponse(member db.Member, user db.User) MemberWithUserResponse {
@@ -584,7 +585,42 @@ func (h *Handler) pickProvisionDisplayName(ctx context.Context, email string) (s
 			name = fmt.Sprintf("u%d", i+1)
 		}
 	}
-	return "", errors.New("could not allocate unique display name")
+		return "", errors.New("could not allocate unique display name")
+}
+
+var errDisplayNameTaken = errors.New("display name already taken")
+
+func writeDisplayNameValidationError(w http.ResponseWriter, err error) {
+	if errors.Is(err, userdisplay.ErrEmptyDisplayName) {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if errors.Is(err, userdisplay.ErrDisplayNameLong) {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid name")
+}
+
+func (h *Handler) resolveProvisionDisplayName(ctx context.Context, email, requestedName string, requireExplicit bool) (string, error) {
+	n := strings.TrimSpace(requestedName)
+	if n == "" {
+		if requireExplicit {
+			return "", userdisplay.ErrEmptyDisplayName
+		}
+		return h.pickProvisionDisplayName(ctx, email)
+	}
+	if err := userdisplay.ValidateDisplayName(n); err != nil {
+		return "", err
+	}
+	taken, err := h.Queries.IsDisplayNameTaken(ctx, n)
+	if err != nil {
+		return "", err
+	}
+	if taken {
+		return "", errDisplayNameTaken
+	}
+	return n, nil
 }
 
 func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
@@ -631,8 +667,21 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Queries.GetUserByEmail(r.Context(), email)
 	if err != nil {
 		if isNotFound(err) {
-			provisionName, perr := h.pickProvisionDisplayName(r.Context(), email)
+			requestedName := ""
+			if req.Name != nil {
+				requestedName = *req.Name
+			}
+			requireName := req.Password != nil && strings.TrimSpace(*req.Password) != ""
+			provisionName, perr := h.resolveProvisionDisplayName(r.Context(), email, requestedName, requireName)
 			if perr != nil {
+				if errors.Is(perr, userdisplay.ErrEmptyDisplayName) || errors.Is(perr, userdisplay.ErrDisplayNameLong) {
+					writeDisplayNameValidationError(w, perr)
+					return
+				}
+				if errors.Is(perr, errDisplayNameTaken) {
+					writeError(w, http.StatusConflict, "display name already taken")
+					return
+				}
 				slog.Warn("provision display name failed", append(logger.RequestAttrs(r), "error", perr)...)
 				writeError(w, http.StatusInternalServerError, "failed to create user")
 				return
@@ -700,7 +749,7 @@ func (h *Handler) CreateMember(w http.ResponseWriter, r *http.Request) {
 // provisionMemberWithPassword creates (or reuses) a user with the given email,
 // sets an initial password, adds them to the workspace, and marks them
 // onboarded so they can log in immediately without email delivery.
-func (h *Handler) provisionMemberWithPassword(w http.ResponseWriter, r *http.Request, requester db.Member, email, role, password string) {
+func (h *Handler) provisionMemberWithPassword(w http.ResponseWriter, r *http.Request, requester db.Member, email, role, password, displayName string) {
 	if err := auth.ValidatePasswordSetting(password); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -733,8 +782,16 @@ func (h *Handler) provisionMemberWithPassword(w http.ResponseWriter, r *http.Req
 
 	user := existingUser
 	if isNotFound(err) {
-		provisionName, perr := h.pickProvisionDisplayName(r.Context(), email)
+		provisionName, perr := h.resolveProvisionDisplayName(r.Context(), email, displayName, true)
 		if perr != nil {
+			if errors.Is(perr, userdisplay.ErrEmptyDisplayName) || errors.Is(perr, userdisplay.ErrDisplayNameLong) {
+				writeDisplayNameValidationError(w, perr)
+				return
+			}
+			if errors.Is(perr, errDisplayNameTaken) {
+				writeError(w, http.StatusConflict, "display name already taken")
+				return
+			}
 			slog.Warn("provision display name failed", append(logger.RequestAttrs(r), "error", perr)...)
 			writeError(w, http.StatusInternalServerError, "failed to create user")
 			return
@@ -893,15 +950,7 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 	if nameUpdate {
 		n := strings.TrimSpace(*req.Name)
 		if err := userdisplay.ValidateDisplayName(n); err != nil {
-			if errors.Is(err, userdisplay.ErrEmptyDisplayName) {
-				writeError(w, http.StatusBadRequest, "name is required")
-				return
-			}
-			if errors.Is(err, userdisplay.ErrDisplayNameLong) {
-				writeError(w, http.StatusBadRequest, err.Error())
-				return
-			}
-			writeError(w, http.StatusBadRequest, "invalid name")
+			writeDisplayNameValidationError(w, err)
 			return
 		}
 		taken, err := h.Queries.IsDisplayNameTakenByOther(r.Context(), db.IsDisplayNameTakenByOtherParams{

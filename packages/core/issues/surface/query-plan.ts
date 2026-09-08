@@ -29,9 +29,10 @@ function buildMyRelationPlan(
   scope: Extract<IssueScope, { type: "my" }>,
   scopeKey: string,
 ): IssueSurfaceQueryPlan {
+  let plan: IssueSurfaceQueryPlan;
   switch (scope.relation) {
     case "assigned":
-      return {
+      plan = {
         scopeKey,
         queryFilter: { assignee_id: scope.userId },
         createDefaults: {
@@ -39,21 +40,31 @@ function buildMyRelationPlan(
           assignee_id: scope.userId,
         },
       };
+      break;
     case "created":
-      return {
+      plan = {
         scopeKey,
         queryFilter: { creator_id: scope.userId },
         createDefaults: {},
       };
+      break;
     case "involved":
-      return {
+      plan = {
         scopeKey,
         queryFilter: { involves_user_id: scope.userId },
         createDefaults: {},
       };
+      break;
     case "all":
-      return { scopeKey, queryFilter: {}, createDefaults: {} };
+      plan = { scopeKey, queryFilter: {}, createDefaults: {} };
+      break;
   }
+  if (!scope.projectId) return plan;
+  return {
+    ...plan,
+    queryFilter: { ...plan.queryFilter, project_id: scope.projectId },
+    createDefaults: { ...plan.createDefaults, project_id: scope.projectId },
+  };
 }
 
 export function buildIssueSurfaceQueryPlan(

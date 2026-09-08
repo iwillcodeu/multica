@@ -386,6 +386,31 @@ describe("useIssueSurfaceController", () => {
     });
   });
 
+  it("pins a my-issues project tab into the server query, not a client filter", async () => {
+    const { result } = renderHook(
+      () =>
+        useIssueSurfaceController({
+          scope: {
+            type: "my",
+            relation: "assigned",
+            userId: "user-1",
+            projectId: "p1",
+          },
+          modes: ["board", "list", "table", "swimlane"],
+        }),
+      { wrapper: makeWrapper(qc, "my:user-1:assigned:p1") },
+    );
+
+    await waitFor(() => expect(listIssueTableRows).toHaveBeenCalled());
+    expect(result.current.scopeKey).toBe("my:user-1:assigned:p1");
+    expect(result.current.projectId).toBe("p1");
+    expect(result.current.tableQuerySpec.scope).toEqual({
+      kind: "my",
+      relation: "assigned",
+    });
+    expect(result.current.tableQuerySpec.filters.project_ids).toEqual(["p1"]);
+  });
+
   it("keeps actor scopes keyed by actor in the unified query shape", async () => {
     const { result } = renderHook(
       () =>
@@ -423,6 +448,22 @@ describe("useIssueSurfaceController", () => {
       expected: {
         assignee_type: "member",
         assignee_id: "user-1",
+        status: "todo",
+      },
+    },
+    {
+      name: "my assigned in a project tab",
+      surfaceKey: "my:user-1:assigned:p1",
+      scope: {
+        type: "my" as const,
+        relation: "assigned" as const,
+        userId: "user-1",
+        projectId: "p1",
+      },
+      expected: {
+        assignee_type: "member",
+        assignee_id: "user-1",
+        project_id: "p1",
         status: "todo",
       },
     },
